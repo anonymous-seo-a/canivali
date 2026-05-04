@@ -56,6 +56,98 @@ export function buildHtaccessBlock(rules: RedirectRule[]): string {
   return lines.join('\n');
 }
 
+/**
+ * チェーン (A→B→C) を畳み、循環 (A→B→C→A) を破る。
+ *
+ * 入力: loser→winner の生のリダイレクト集合
+ * 出力: loser→canonical の集合 (チェーンは終端まで畳む、循環は最高 traffic を canonical に)
+ *
+ * 戦略:
+ *   1. グラフ構築 (each loser has 1 winner)
+ *   2. 各ノードについて winner を辿り、終端 (= 自身が誰の winner にもなっていない) を canonical に
+ *   3. 循環検出: 訪問済みに戻ったら循環。循環内の最高 traffic ノードを canonical にし、
+ *      他は canonical に向ける
+ */
+export type ChainResolution = {
+  resolved: RedirectRule[];          // 最終 loser → canonical
+  chains: Array<{ from: number; via: number[]; to: number }>;  // 2段以上のチェーン
+  cycles: number[][];                // 循環したノード集合
+};
+
+export function resolveChains(
+  rules: RedirectRule[],
+  trafficScore: (id: number) => number,
+  urlOf: (id: number) => string | undefined,
+): ChainResolution {
+  const winnerOf = new Map<number, RedirectRule>();
+  for (const r of rules) winnerOf.set(r.loser_id, r);
+
+  const cycles: number[][] = [];
+  const chains: Array<{ from: number; via: number[]; to: number }> = [];
+  const finalDest = new Map<number, number>();
+
+  for (const start of winnerOf.keys()) {
+    if (finalDest.has(start)) continue;
+    const visited = new Set<number>();
+    let cur = start;
+    const path: number[] = [start];
+    while (winnerOf.has(cur)) {
+      const next = winnerOf.get(cur)!.winner_id;
+      if (visited.has(cur) || cur === next) break;
+      if (path.includes(next)) {
+        // cycle
+        const idx = path.indexOf(next);
+        const cycle = path.slice(idx);
+        cycles.push(cycle);
+        // canonical = traffic max
+        let canon = cycle[0]!;
+        let canonScore = trafficScore(canon);
+        for (const n of cycle) {
+          const s = trafficScore(n);
+          if (s > canonScore) {
+            canon = n;
+            canonScore = s;
+          }
+        }
+        for (const n of cycle) {
+          if (n !== canon) finalDest.set(n, canon);
+          else finalDest.set(n, n); // canonical points to self (skip in output)
+        }
+        // 入口ノード (start to cycle[0]) も canon へ
+        for (const n of path.slice(0, idx)) finalDest.set(n, canon);
+        break;
+      }
+      visited.add(cur);
+      path.push(next);
+      cur = next;
+    }
+    if (!finalDest.has(start)) {
+      finalDest.set(start, cur);
+      if (path.length > 2) chains.push({ from: start, via: path.slice(1, -1), to: cur });
+    }
+    // 中間ノードもキャッシュ
+    for (let i = 1; i < path.length - 1; i++) {
+      const n = path[i]!;
+      if (!finalDest.has(n)) finalDest.set(n, cur);
+    }
+  }
+
+  const resolved: RedirectRule[] = [];
+  for (const [from, to] of finalDest) {
+    if (from === to) continue;
+    const url = urlOf(to);
+    if (!url) continue;
+    const orig = winnerOf.get(from);
+    resolved.push({
+      loser_id: from,
+      loser_url: orig?.loser_url ?? '',
+      winner_id: to,
+      winner_url: url,
+    });
+  }
+  return { resolved, chains, cycles };
+}
+
 export function loadApprovedRedirects(
   db: Database.Database,
   mode: 'approved' | 'auto' | 'all',

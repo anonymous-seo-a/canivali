@@ -71,17 +71,19 @@ const basePair = (overrides: Partial<PairMetrics> = {}): PairMetrics => ({
   serp_overlap_pct: null,
   shared_queries_count: null,
   pair_relation: 'same_cell',
+  kw_jaccard: 0.1,
+  kw_overlap_count: 1,
   a: baseArticle({ article_id: 1, clicks: 1000, impressions: 5000 }),
   b: baseArticle({ article_id: 2, clicks: 100, impressions: 500 }),
   ...overrides,
 });
 
 describe('decidePair', () => {
-  it('same_cell + cosine ≥ 0.95 → CONSOLIDATE high confidence', () => {
-    const r = decidePair(basePair({ cosine_similarity: 0.97 }));
+  it('same_cell + cosine ≥ 0.95 + kw_jaccard ≥ 0.15 → CONSOLIDATE high confidence', () => {
+    const r = decidePair(basePair({ cosine_similarity: 0.97, kw_jaccard: 0.2, kw_overlap_count: 3 }));
     expect(r.action).toBe('CONSOLIDATE');
     expect(r.confidence).toBeGreaterThanOrEqual(0.9);
-    expect(r.target_article_id).toBe(1); // higher clicks wins
+    expect(r.target_article_id).toBe(1);
   });
 
   it('same_cell + cosine 0.85-0.9 → CONSOLIDATE moderate', () => {
@@ -108,6 +110,33 @@ describe('decidePair', () => {
   it('unclassified → REASSIGN', () => {
     const r = decidePair(basePair({ pair_relation: 'unclassified' }));
     expect(r.action).toBe('REASSIGN');
+  });
+
+  it('same_cell + cosine high but kw_jaccard < 0.05 → DIFFERENTIATE', () => {
+    const r = decidePair(
+      basePair({
+        cosine_similarity: 0.97,
+        kw_jaccard: 0.02,
+        kw_overlap_count: 1,
+        a: baseArticle({ article_id: 1, impressions: 5000 }),
+        b: baseArticle({ article_id: 2, impressions: 3000 }),
+      }),
+    );
+    expect(r.action).toBe('DIFFERENTIATE');
+  });
+
+  it('cross_cell with high kw_jaccard ≥ 0.3 → CONSOLIDATE', () => {
+    const r = decidePair(
+      basePair({
+        pair_relation: 'fully_different',
+        cosine_similarity: 0.86,
+        kw_jaccard: 0.4,
+        kw_overlap_count: 6,
+        a: baseArticle({ article_id: 1, impressions: 5000 }),
+        b: baseArticle({ article_id: 2, impressions: 3000 }),
+      }),
+    );
+    expect(r.action).toBe('CONSOLIDATE');
   });
 
   it('quarantined article in pair → KEEP (skip)', () => {

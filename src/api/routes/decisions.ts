@@ -6,6 +6,7 @@ import {
   buildHtaccessBlock,
   deployRedirects,
   loadApprovedRedirects,
+  resolveChains,
   verifyRedirect,
 } from '../../lib/redirect-deploy.js';
 
@@ -46,6 +47,7 @@ decisionsRouter.get('/', (req, res) => {
               -- 関連メタ
               a.title AS article_title, a.url AS article_url,
               cp.cosine_similarity, cp.serp_overlap_pct, cp.pair_relation, cp.severity,
+              cp.kw_jaccard, cp.kw_overlap_count, cp.kw_a_only_count, cp.kw_b_only_count,
               cp.winner_article_id,
               cp.article_a_id, cp.article_b_id,
               wa.title AS a_title, wa.url AS a_url,
@@ -309,33 +311,77 @@ async function executeWpConsolidation(
   return { ok, fail, details };
 }
 
+function resolveWithTraffic(db: ReturnType<typeof getDb>, mode: 'approved' | 'auto' | 'all') {
+  const raw = loadApprovedRedirects(db, mode);
+  const articleRows = db
+    .prepare(
+      `SELECT a.article_id, a.url, COALESCE(p.clicks,0) AS clicks, COALESCE(p.impressions,0) AS imps
+         FROM master_articles a
+    LEFT JOIN article_performance_snapshots p
+           ON p.article_id = a.article_id AND p.window_days = 90`,
+    )
+    .all() as Array<{ article_id: number; url: string; clicks: number; imps: number }>;
+  const traffic = new Map<number, number>();
+  const urls = new Map<number, string>();
+  for (const r of articleRows) {
+    traffic.set(r.article_id, r.clicks * 10 + r.imps); // weight clicks much higher
+    urls.set(r.article_id, r.url);
+  }
+  return resolveChains(
+    raw,
+    (id) => traffic.get(id) ?? 0,
+    (id) => urls.get(id),
+  );
+}
+
+decisionsRouter.get('/_/chain-resolution', (req, res) => {
+  // チェーン/循環の解析結果を返す
+  const mode = (req.query.mode as 'approved' | 'auto' | 'all') || 'auto';
+  const r = resolveWithTraffic(getDb(), mode);
+  res.json({
+    mode,
+    raw_count: r.resolved.length + r.cycles.flat().length,
+    resolved_count: r.resolved.length,
+    chains: r.chains,
+    cycles: r.cycles,
+  });
+});
+
 decisionsRouter.get('/_/htaccess', (req, res) => {
-  // .htaccess に貼り付ける用の 301 リダイレクトブロックを返す
+  // .htaccess に貼り付ける用の 301 リダイレクトブロックを返す (チェーン解決済み)
   const mode = (req.query.mode as 'approved' | 'auto' | 'all') || 'approved';
-  const rules = loadApprovedRedirects(getDb(), mode);
-  const block = buildHtaccessBlock(rules);
+  const r = resolveWithTraffic(getDb(), mode);
+  const block = buildHtaccessBlock(r.resolved);
   res.type('text/plain').send(block);
 });
 
 decisionsRouter.post('/_/deploy-redirects', (req, res) => {
-  // SSH で Xserver の /no1/.htaccess の canivali ブロックを更新
   const mode = (req.body?.mode as 'approved' | 'auto' | 'all') || 'approved';
-  const rules = loadApprovedRedirects(getDb(), mode);
-  if (rules.length === 0) {
+  const r = resolveWithTraffic(getDb(), mode);
+  if (r.resolved.length === 0) {
     res.json({ ok: true, deployed: 0, message: 'no rules to deploy' });
     return;
   }
-  deployRedirects(rules)
-    .then((r) => {
+  if (r.cycles.length > 0) {
+    logger.warn({ cycles: r.cycles }, 'cycles detected, broken automatically');
+  }
+  deployRedirects(r.resolved)
+    .then((d) => {
       recordAudit(getDb(), {
         entityType: 'decision_log',
         entityId: 'deploy_redirects',
         action: 'execute',
-        after: { mode, ...r },
+        after: { mode, ...d, chains: r.chains.length, cycles: r.cycles.length },
         actor: 'human:ui',
-        reason: '.htaccess 301 deployed',
+        reason: '.htaccess 301 deployed (chain-resolved)',
       });
-      res.json({ ok: true, deployed: r.rules, backup: r.backup });
+      res.json({
+        ok: true,
+        deployed: d.rules,
+        backup: d.backup,
+        chains_collapsed: r.chains.length,
+        cycles_broken: r.cycles.length,
+      });
     })
     .catch((e) => {
       const msg = e instanceof Error ? e.message : String(e);

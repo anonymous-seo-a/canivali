@@ -35,6 +35,14 @@ type Preview = {
   items: PreviewItem[];
 };
 
+type ChainResolution = {
+  mode: string;
+  raw_count: number;
+  resolved_count: number;
+  chains: Array<{ from: number; via: number[]; to: number }>;
+  cycles: number[][];
+};
+
 const RATIONALE_JP: Record<string, string> = {
   same_cell: '同じカテゴリ × 同じ商品軸 = 完全に同じ枠',
   same_subtopic_diff_v: '同じカテゴリだが商品軸が違う',
@@ -55,6 +63,7 @@ function jpRationale(factors: string[]): string {
 
 export function ExecuteView() {
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [chainRes, setChainRes] = useState<ChainResolution | null>(null);
   const [mode, setMode] = useState<'approved' | 'auto' | 'all'>('auto');
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message?: string; error?: string } | null>(null);
@@ -62,6 +71,7 @@ export function ExecuteView() {
   function refresh() {
     setResult(null);
     fetch(`/api/decisions/_/preview?mode=${mode}`).then((r) => r.json()).then(setPreview);
+    fetch(`/api/decisions/_/chain-resolution?mode=${mode}`).then((r) => r.json()).then(setChainRes);
   }
   useEffect(refresh, [mode]);
 
@@ -206,6 +216,34 @@ export function ExecuteView() {
             }}
           >
             {result.ok ? `✅ ${result.message}` : `❌ ${result.error}`}
+          </div>
+        )}
+        {chainRes && (chainRes.chains.length > 0 || chainRes.cycles.length > 0) && (
+          <div
+            style={{
+              marginTop: '0.6rem',
+              padding: '0.4rem 0.5rem',
+              background: '#f39c1233',
+              borderRadius: '0.3rem',
+              fontSize: '0.82rem',
+            }}
+          >
+            <strong>🔗 チェーン/循環の検出:</strong>{' '}
+            {chainRes.chains.length} 件のチェーン (例: A→B→C を A→C に短縮)、
+            {chainRes.cycles.length} 件の循環 (例: A→B→A を traffic 多い側に統一) を**自動で解決**して 301 を出力します。
+            <details style={{ marginTop: '0.3rem' }}>
+              <summary style={{ cursor: 'pointer' }}>詳細を見る</summary>
+              {chainRes.chains.slice(0, 5).map((c, i) => (
+                <div key={i} style={{ fontSize: '0.75rem' }}>
+                  {c.from} → {c.via.join(' → ')} → {c.to} (短縮)
+                </div>
+              ))}
+              {chainRes.cycles.slice(0, 5).map((c, i) => (
+                <div key={i} style={{ fontSize: '0.75rem', color: '#e74c3c' }}>
+                  ⚠️ 循環: {c.join(' → ')} → {c[0]}
+                </div>
+              ))}
+            </details>
           </div>
         )}
       </div>

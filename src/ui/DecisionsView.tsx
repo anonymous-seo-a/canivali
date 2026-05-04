@@ -17,6 +17,8 @@ type Decision = {
   serp_overlap_pct: number | null;
   pair_relation: string | null;
   severity: string | null;
+  kw_jaccard: number | null;
+  kw_overlap_count: number | null;
   winner_article_id: number | null;
   article_a_id: number | null;
   article_b_id: number | null;
@@ -316,8 +318,22 @@ function DecisionCard({
           {lbl.jp}
         </span>
         {d.cosine_similarity !== null && (
-          <span title={`類似度 ${(d.cosine_similarity * 100).toFixed(1)}%`} style={{ fontSize: '0.85rem' }}>
+          <span title={`本文類似度 ${(d.cosine_similarity * 100).toFixed(1)}%`} style={{ fontSize: '0.85rem' }}>
             {similarityStars(d.cosine_similarity)}
+          </span>
+        )}
+        {d.kw_jaccard !== null && d.kw_overlap_count !== null && (
+          <span
+            title={`top KW jaccard ${(d.kw_jaccard * 100).toFixed(0)}% / 共通 KW ${d.kw_overlap_count} 件`}
+            style={{
+              fontSize: '0.7rem',
+              padding: '0.1rem 0.3rem',
+              borderRadius: '0.3rem',
+              background: d.kw_jaccard >= 0.15 ? '#2ecc7133' : '#e74c3c22',
+              color: d.kw_jaccard >= 0.15 ? '#2ecc71' : '#e74c3c',
+            }}
+          >
+            KW {d.kw_overlap_count}件共通
           </span>
         )}
         <span style={{ fontSize: '0.78rem', color: conf.color, fontWeight: 600 }}>

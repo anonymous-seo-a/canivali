@@ -41,9 +41,20 @@ export type PairMetrics = {
   serp_overlap_pct: number | null;
   shared_queries_count: number | null;
   pair_relation: PairRelation | null;
+  kw_jaccard: number | null;
+  kw_overlap_count: number | null;
   a: ArticleMetrics;
   b: ArticleMetrics;
 };
+
+// KW jaccard ゲート閾値:
+//   - >= JACCARD_HIGH:   完全に同じ意図 = CONSOLIDATE 強推奨
+//   - >= JACCARD_OK:     部分一致 = CONSOLIDATE 可
+//   - >= JACCARD_LOW:    不確実 = DIFFERENTIATE 推奨
+//   - <  JACCARD_LOW:    意図違い = CONSOLIDATE 拒否
+const JACCARD_HIGH = 0.3;
+const JACCARD_OK = 0.15;
+const JACCARD_LOW = 0.05;
 
 export type Decision = {
   action: Action;
@@ -165,6 +176,8 @@ export function decidePair(p: PairMetrics): Decision {
     relation: p.pair_relation ?? 'null',
     serp_overlap: p.serp_overlap_pct ?? -1,
     shared_queries: p.shared_queries_count ?? 0,
+    kw_jaccard: p.kw_jaccard ?? -1,
+    kw_overlap: p.kw_overlap_count ?? 0,
   };
 
   // どちらかが quarantine confirmed → ペア判定不要 (両 in_scope のみ)
@@ -184,13 +197,30 @@ export function decidePair(p: PairMetrics): Decision {
   scores.loser_score = round(score_a >= score_b ? score_b : score_a);
   scores.winner_id = winner.article_id;
 
+  // ====== KW ジャッカードゲート (CONSOLIDATE 判定の前提) ======
+  // KW が極端に違うペアは「Google が別意図と判断」しているので CONSOLIDATE しない。
+  // ただし、両者の GSC データが存在する場合のみ適用 (新規記事や低トラフィックは除外)。
+  const hasKwData =
+    p.kw_jaccard !== null &&
+    p.kw_overlap_count !== null &&
+    (p.a.impressions > 50 || p.b.impressions > 50); // どちらかが GSC でランクしてる
+
   // === Same cell (subtopic + V 両方一致) ===
   if (p.pair_relation === 'same_cell') {
+    if (hasKwData && (p.kw_jaccard ?? 0) < JACCARD_LOW) {
+      factors.push('same_cell', `kw_jaccard<${JACCARD_LOW}`, 'intent_diverged');
+      return {
+        action: 'DIFFERENTIATE',
+        confidence: 0.65,
+        rationale: { factors, scores },
+      };
+    }
     if (p.cosine_similarity >= 0.95) {
       factors.push('same_cell', 'cosine>=0.95');
+      const conf = hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_HIGH ? 0.97 : hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_OK ? 0.93 : 0.85;
       return {
         action: 'CONSOLIDATE',
-        confidence: 0.95,
+        confidence: conf,
         target_article_id: winner.article_id,
         target_url: winner.url,
         rationale: { factors, scores },
@@ -198,9 +228,10 @@ export function decidePair(p: PairMetrics): Decision {
     }
     if (p.cosine_similarity >= 0.9) {
       factors.push('same_cell', 'cosine>=0.9');
+      const conf = hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_OK ? 0.85 : 0.75;
       return {
         action: 'CONSOLIDATE',
-        confidence: 0.85,
+        confidence: conf,
         target_article_id: winner.article_id,
         target_url: winner.url,
         rationale: { factors, scores },
@@ -209,19 +240,22 @@ export function decidePair(p: PairMetrics): Decision {
     factors.push('same_cell', 'cosine_in_0.85-0.9');
     return {
       action: 'CONSOLIDATE',
-      confidence: 0.7,
+      confidence: hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_OK ? 0.72 : 0.6,
       target_article_id: winner.article_id,
       target_url: winner.url,
       rationale: { factors, scores },
     };
   }
 
-  // === SERP データがある場合の強シグナル ===
-  if (p.serp_overlap_pct !== null && p.serp_overlap_pct >= 0.5) {
-    factors.push('serp_overlap>=0.5');
+  // === SERP overlap または KW jaccard が高い場合の強シグナル ===
+  if (
+    (p.serp_overlap_pct !== null && p.serp_overlap_pct >= 0.5) ||
+    (hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_HIGH)
+  ) {
+    factors.push('cross_cell_strong_overlap');
     return {
       action: 'CONSOLIDATE',
-      confidence: 0.75,
+      confidence: 0.78,
       target_article_id: winner.article_id,
       target_url: winner.url,
       rationale: { factors, scores },

@@ -34,6 +34,7 @@
     "decide:reassign-target": "tsx src/decision/reassign-target.ts",
     "decide:split": "tsx src/decision/split-detect.ts",
     "decide:lift": "tsx src/decision/compute-lift.ts",
+    "decide:kw-analysis": "tsx src/decision/kw-analysis.ts",
     "verify:env": "tsx scripts/verify-env.ts",
     "verify:db": "tsx scripts/verify-db.ts"
   },

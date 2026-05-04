@@ -55,6 +55,8 @@ function buildPairMetrics(
     serp_overlap_pct: number | null;
     shared_queries_count: number | null;
     pair_relation: PairRelation | null;
+    kw_jaccard: number | null;
+    kw_overlap_count: number | null;
   },
 ): PairMetrics | null {
   const a = getArticleMetrics(db, pair.article_a_id);
@@ -66,6 +68,8 @@ function buildPairMetrics(
     serp_overlap_pct: pair.serp_overlap_pct,
     shared_queries_count: pair.shared_queries_count,
     pair_relation: pair.pair_relation,
+    kw_jaccard: pair.kw_jaccard,
+    kw_overlap_count: pair.kw_overlap_count,
     a,
     b,
   };
@@ -127,7 +131,8 @@ function main() {
   const pairs = db
     .prepare(
       `SELECT pair_id, article_a_id, article_b_id, cosine_similarity,
-              serp_overlap_pct, shared_queries_count, pair_relation
+              serp_overlap_pct, shared_queries_count, pair_relation,
+              kw_jaccard, kw_overlap_count
          FROM cannibalization_pairs
         WHERE severity IN ('high','medium')`,
     )
@@ -139,6 +144,8 @@ function main() {
     serp_overlap_pct: number | null;
     shared_queries_count: number | null;
     pair_relation: PairRelation | null;
+    kw_jaccard: number | null;
+    kw_overlap_count: number | null;
   }>;
 
   const pairHist = new Map<string, number>();
