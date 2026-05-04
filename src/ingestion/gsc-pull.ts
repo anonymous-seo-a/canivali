@@ -56,7 +56,6 @@ async function* iterateGsc(opts: {
         dimensions: ['query', 'page'],
         rowLimit: ROW_LIMIT,
         startRow,
-        type: 'web',
       },
     });
     const rows = (res.data.rows ?? []) as Row[];
