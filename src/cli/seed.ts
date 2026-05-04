@@ -47,6 +47,7 @@ const MIGRATION_VERSIONS: Record<string, string> = {
   '0004_lift_tracking.sql': '0.4.0',
   '0005_kw_jaccard.sql': '0.5.0',
   '0006_features.sql': '0.6.0',
+  '0007_umap_coords.sql': '0.7.0',
 };
 
 function applySeeds(): void {

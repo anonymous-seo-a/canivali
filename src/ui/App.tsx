@@ -4,19 +4,25 @@ import { DashboardView } from './DashboardView.js';
 import { DecisionsView } from './DecisionsView.js';
 import { ExecuteView } from './ExecuteView.js';
 import { HeatmapView } from './HeatmapView.js';
+import { KwFlowView } from './KwFlowView.js';
+import { NetworkView } from './NetworkView.js';
+import { UmapView } from './UmapView.js';
 
-type Tab = 'overview' | 'heatmap' | 'decisions' | 'execute' | 'articles';
+type Tab = 'decisions' | 'execute' | 'overview' | 'heatmap' | 'umap' | 'kwflow' | 'network' | 'articles';
 
 const TABS: Array<{ key: Tab; label: string; desc: string }> = [
-  { key: 'overview',  label: '📊 Overview',  desc: 'KPI とサマリ' },
-  { key: 'heatmap',   label: '🗺️ Heatmap',  desc: 'subtopic × 商品軸 ヒートマップ' },
   { key: 'decisions', label: '① レビュー',   desc: 'engine の判定を承認/却下' },
   { key: 'execute',   label: '② 実行',       desc: '承認済みを一括実行' },
+  { key: 'overview',  label: '📊 Overview',  desc: 'KPI とサマリ' },
+  { key: 'heatmap',   label: '🗺️ Heatmap',  desc: 'subtopic × 商品軸 ヒートマップ' },
+  { key: 'umap',      label: '🌌 Map',        desc: 'UMAP 2D 散布図' },
+  { key: 'kwflow',    label: '🔀 KW Flow',   desc: 'KW → subtopic → 記事 の Sankey' },
+  { key: 'network',   label: '🕸️ Network',  desc: 'カニバリペアのネットワーク' },
   { key: 'articles',  label: '📋 記事一覧',   desc: '434 記事の検索/フィルタ' },
 ];
 
 export function App() {
-  const [tab, setTab] = useState<Tab>('heatmap');
+  const [tab, setTab] = useState<Tab>('decisions');
 
   return (
     <>
@@ -37,6 +43,9 @@ export function App() {
       </header>
       {tab === 'overview' && <DashboardView />}
       {tab === 'heatmap' && <HeatmapView />}
+      {tab === 'umap' && <UmapView />}
+      {tab === 'kwflow' && <KwFlowView />}
+      {tab === 'network' && <NetworkView />}
       {tab === 'articles' && <ArticlesView />}
       {tab === 'decisions' && <DecisionsView />}
       {tab === 'execute' && <ExecuteView />}
