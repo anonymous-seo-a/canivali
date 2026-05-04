@@ -148,7 +148,7 @@ export function DecisionsView() {
 
       {summary && (
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', margin: '0.5rem 0 0.75rem' }}>
-          {(['CONSOLIDATE', 'DIFFERENTIATE', 'REASSIGN', 'KEEP', 'DELETE'] as const).map((a) => {
+          {(['CONSOLIDATE', 'DIFFERENTIATE', 'SPLIT', 'REASSIGN', 'KEEP', 'DELETE'] as const).map((a) => {
             const lbl = ACTION_LABEL[a]!;
             const n = counts.get(a) ?? 0;
             const isActive = action === a;

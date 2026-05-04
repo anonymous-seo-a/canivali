@@ -31,6 +31,8 @@
     "decide:cell-relation": "tsx src/decision/cell-relation.ts",
     "decide:run": "tsx src/decision/run-engine.ts",
     "decide:pilot": "tsx src/decision/pilot-eval.ts",
+    "decide:reassign-target": "tsx src/decision/reassign-target.ts",
+    "decide:split": "tsx src/decision/split-detect.ts",
     "verify:env": "tsx scripts/verify-env.ts",
     "verify:db": "tsx scripts/verify-db.ts"
   },

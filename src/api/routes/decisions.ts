@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { getDb, recordAudit } from '../../lib/db.js';
+import { consolidateLoser, findPostByUrl } from '../../lib/wordpress.js';
+import { logger } from '../../lib/logger.js';
 
 export const decisionsRouter: Router = Router();
 
@@ -196,12 +198,89 @@ decisionsRouter.post('/_/execute', (req, res) => {
     return;
   }
 
-  // 本実行: WP REST API 統合 (未実装)
-  res.status(501).json({
-    ok: false,
-    error: 'WordPress REST API integration not yet configured. Set WP_API_BASE and WP_APP_PASSWORD in .env first.',
+  // 本実行: WP REST API で各 loser を draft 化 + redirect meta 保存
+  void executeWpConsolidation(plan)
+    .then((summary) => {
+      recordAudit(getDb(), {
+        entityType: 'decision_log',
+        entityId: 'execute_wp',
+        action: 'execute',
+        after: { mode, summary },
+        actor: 'human:ui',
+        reason: 'WP consolidation executed',
+      });
+    })
+    .catch((e) => {
+      logger.error({ err: e instanceof Error ? e.message : String(e) }, 'wp execute background error');
+    });
+
+  res.json({
+    ok: true,
+    dry_run: false,
+    message: `${plan.length} 件の統合をバックグラウンドで実行中。完了は audit log を確認。`,
     plan_size: plan.length,
   });
+});
+
+async function executeWpConsolidation(
+  plan: Array<{ decision_id: number; pair_id: number; winner_article_id: number; loser_id: number; winner_url: string; loser_url: string }>,
+): Promise<{ ok: number; fail: number; details: Array<{ loser_id: number; result: string }> }> {
+  const db = getDb();
+  const details: Array<{ loser_id: number; result: string }> = [];
+  let ok = 0;
+  let fail = 0;
+
+  for (const item of plan) {
+    try {
+      const post = await findPostByUrl(item.loser_url);
+      if (!post) {
+        fail++;
+        details.push({ loser_id: item.loser_id, result: 'wp_post_not_found' });
+        continue;
+      }
+      await consolidateLoser({
+        loserPostId: post.id,
+        winnerUrl: item.winner_url,
+        reason: `auto-consolidated by canivali (decision_id=${item.decision_id})`,
+      });
+      // master_articles の status を反映
+      db.prepare(
+        `UPDATE master_articles SET status='consolidated', redirect_target_url=?, updated_at=strftime('%s','now') WHERE article_id = ?`,
+      ).run(item.winner_url, item.loser_id);
+      // decision_log の executed_at をマーク
+      db.prepare(
+        `UPDATE decision_log SET executed_at=strftime('%s','now') WHERE decision_id = ?`,
+      ).run(item.decision_id);
+      ok++;
+      details.push({ loser_id: item.loser_id, result: 'ok' });
+      logger.info({ loser_id: item.loser_id, winner: item.winner_url }, 'wp consolidate ok');
+    } catch (e) {
+      fail++;
+      const msg = e instanceof Error ? e.message : String(e);
+      details.push({ loser_id: item.loser_id, result: `error: ${msg}` });
+      logger.warn({ loser_id: item.loser_id, err: msg }, 'wp consolidate failed');
+    }
+  }
+  return { ok, fail, details };
+}
+
+decisionsRouter.get('/_/execute-status', (_req, res) => {
+  // 直近の WP 実行ログを返す
+  const db = getDb();
+  const last = db
+    .prepare(
+      `SELECT created_at, after_state_json, reason
+         FROM master_audit_log
+        WHERE actor='human:ui' AND entity_type='decision_log' AND entity_id='execute_wp'
+        ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get() as { created_at: number; after_state_json: string; reason: string } | undefined;
+  if (!last) {
+    res.json({ status: 'no_execution_yet' });
+    return;
+  }
+  const after = JSON.parse(last.after_state_json);
+  res.json({ at: last.created_at, ...after });
 });
 
 decisionsRouter.get('/_/impact', (_req, res) => {
