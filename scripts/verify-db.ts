@@ -151,6 +151,42 @@ const checks: Check[] = [
       return { ok: c >= 400, got: `${c}` };
     },
   },
+  // ---------- Phase 7 (Graph normalize invariants) ----------
+  {
+    name: '[P7] no multi-target (1 loser → multiple winners) in CONSOLIDATE',
+    sql: `SELECT COUNT(*) AS c FROM (
+            SELECT loser_id, COUNT(DISTINCT winner_id) AS w
+              FROM (
+                SELECT
+                  CASE WHEN cp.winner_article_id = cp.article_a_id THEN cp.article_b_id ELSE cp.article_a_id END AS loser_id,
+                  cp.winner_article_id AS winner_id
+                FROM cannibalization_pairs cp
+                JOIN decision_log dl ON dl.pair_id = cp.pair_id AND dl.action='CONSOLIDATE'
+              )
+             GROUP BY loser_id HAVING w > 1
+          )`,
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 0, got: `${c}` };
+    },
+  },
+  {
+    name: '[P7] no role conflict (article both loser and winner) in CONSOLIDATE',
+    sql: `WITH losers AS (
+            SELECT DISTINCT CASE WHEN cp.winner_article_id = cp.article_a_id THEN cp.article_b_id ELSE cp.article_a_id END AS aid
+              FROM cannibalization_pairs cp
+              JOIN decision_log dl ON dl.pair_id = cp.pair_id AND dl.action='CONSOLIDATE'
+          ), winners AS (
+            SELECT DISTINCT cp.winner_article_id AS aid
+              FROM cannibalization_pairs cp
+              JOIN decision_log dl ON dl.pair_id = cp.pair_id AND dl.action='CONSOLIDATE'
+          )
+          SELECT COUNT(*) AS c FROM losers JOIN winners USING(aid)`,
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 0, got: `${c}` };
+    },
+  },
   {
     name: '[P2] cannibalization_pairs serp_overlap evaluated (>=20)',
     sql: 'SELECT COUNT(*) AS c FROM cannibalization_pairs WHERE serp_overlap_pct IS NOT NULL',

@@ -17,7 +17,8 @@ export type Action =
   | 'DIFFERENTIATE'
   | 'SPLIT'
   | 'REASSIGN'
-  | 'DELETE';
+  | 'DELETE'
+  | 'MANUAL_REVIEW'; // Phase B graph-normalize で衝突解消時に降格
 
 export type ArticleMetrics = {
   article_id: number;

@@ -49,6 +49,7 @@ const ACTION_LABELS_JP: Record<string, string> = {
   KEEP: 'そのまま',
   DELETE: '削除',
   SPLIT: '分割',
+  MANUAL_REVIEW: '人手判断',
 };
 
 export function DashboardView() {

@@ -23,6 +23,7 @@ import {
   type PairMetrics,
 } from './engine.js';
 import type { PairRelation } from './cell-relation.js';
+import { type NormalizableDecision, normalizeGraph } from './graph-normalize.js';
 
 const PERF_WINDOW_DAYS = 90;
 
@@ -154,6 +155,65 @@ function main() {
     kw_overlap_count: number | null;
   }>;
 
+  // ----- Phase A: ペア独立判定 (in-memory に集める) -----
+  const phaseA: Array<{
+    pair: typeof pairs[number];
+    metrics: PairMetrics;
+    decision: Decision;
+    norm: NormalizableDecision;
+  }> = [];
+
+  for (const p of pairs) {
+    const m = buildPairMetrics(db, p);
+    if (!m) continue;
+    const d = decidePair(m);
+    phaseA.push({
+      pair: p,
+      metrics: m,
+      decision: d,
+      norm: {
+        pair_id: p.pair_id,
+        article_a_id: p.article_a_id,
+        article_b_id: p.article_b_id,
+        winner_article_id: d.target_article_id ?? null,
+        action: d.action,
+        confidence: d.confidence,
+        rationale: d.rationale,
+      },
+    });
+  }
+
+  // ----- Phase B: グラフ正規化 (multi-target / role conflict) -----
+  // 横断的 absoluteScore を構築: 各記事の被リンク・clicks・winner回数の重み加算
+  const articleAbs = new Map<number, number>();
+  const absRows = db
+    .prepare(
+      `SELECT a.article_id,
+              COALESCE(p.clicks, 0) AS clicks,
+              COALESCE(a.internal_links_in, 0) AS in_links,
+              COALESCE(a.consolidate_winner_count, 0) AS winners,
+              COALESCE(a.business_relevance_score, 0) AS rel
+         FROM master_articles a
+    LEFT JOIN article_performance_snapshots p
+           ON p.article_id = a.article_id AND p.window_days = ?`,
+    )
+    .all(PERF_WINDOW_DAYS) as Array<{ article_id: number; clicks: number; in_links: number; winners: number; rel: number }>;
+  for (const r of absRows) {
+    articleAbs.set(
+      r.article_id,
+      r.clicks * 5 + r.in_links * 10 + r.winners * 3 + r.rel * 100,
+    );
+  }
+  const absoluteScore = (id: number): number => articleAbs.get(id) ?? 0;
+
+  const normReport = normalizeGraph(phaseA.map((x) => x.norm), absoluteScore);
+  console.log('\n=== Phase B: graph normalize ===');
+  console.log(`  CONSOLIDATE: ${normReport.consolidateBefore} → ${normReport.consolidateAfter}`);
+  console.log(`  multi_target_demoted:  ${normReport.multiTargetDemoted}`);
+  console.log(`  role_conflict_demoted: ${normReport.roleConflictDemoted}`);
+  console.log(`  → MANUAL_REVIEW total: ${normReport.manualReview}`);
+
+  // ----- Phase A の結果を Phase B で更新済 (norm.action) で DB 保存 -----
   const pairHist = new Map<string, number>();
   let pairDecisions = 0;
   const updateWinner = db.prepare(
@@ -162,28 +222,36 @@ function main() {
       WHERE pair_id = ?`,
   );
 
-  for (const p of pairs) {
-    const m = buildPairMetrics(db, p);
-    if (!m) continue;
-    const d = decidePair(m);
-    insertDecision(db, { pair_id: p.pair_id, decision: d });
-    pairHist.set(d.action, (pairHist.get(d.action) ?? 0) + 1);
+  for (const x of phaseA) {
+    // norm の action を反映した最終 decision
+    const finalDecision: Decision = {
+      ...x.decision,
+      action: x.norm.action,
+      rationale: x.norm.rationale,
+      // 降格時は target を消す
+      target_article_id: x.norm.action === 'CONSOLIDATE' ? x.decision.target_article_id : undefined,
+      target_url: x.norm.action === 'CONSOLIDATE' ? x.decision.target_url : undefined,
+    };
+    insertDecision(db, { pair_id: x.pair.pair_id, decision: finalDecision });
+    pairHist.set(finalDecision.action, (pairHist.get(finalDecision.action) ?? 0) + 1);
     pairDecisions++;
 
-    // CONSOLIDATE の場合 winner を pair に保存
-    if (d.action === 'CONSOLIDATE' && d.target_article_id) {
-      const winner = m.a.article_id === d.target_article_id ? m.a : m.b;
-      const w = selectWinner(m.a, m.b);
-      const winnerScore = w.winner.article_id === winner.article_id ? Math.max(w.score_a, w.score_b) : Math.min(w.score_a, w.score_b);
+    if (finalDecision.action === 'CONSOLIDATE' && finalDecision.target_article_id) {
+      const w = selectWinner(x.metrics.a, x.metrics.b);
+      const targetIsWinner = w.winner.article_id === finalDecision.target_article_id;
+      const winnerScore = targetIsWinner ? Math.max(w.score_a, w.score_b) : Math.min(w.score_a, w.score_b);
       updateWinner.run(
-        d.target_article_id,
+        finalDecision.target_article_id,
         winnerScore,
-        JSON.stringify({ score_a: w.score_a, score_b: w.score_b, factors: d.rationale.factors }),
-        p.pair_id,
+        JSON.stringify({ score_a: w.score_a, score_b: w.score_b, factors: finalDecision.rationale.factors }),
+        x.pair.pair_id,
       );
+    } else {
+      // 降格された場合、winner_article_id をクリアして DB の整合性も保つ
+      db.prepare('UPDATE cannibalization_pairs SET winner_article_id = NULL WHERE pair_id = ?').run(x.pair.pair_id);
     }
   }
-  console.log('\n=== pair-level decisions ===');
+  console.log('\n=== pair-level decisions (Phase B 適用後) ===');
   for (const [k, v] of [...pairHist.entries()].sort((a, b) => b[1] - a[1])) {
     console.log(`  ${k.padEnd(15)} ${v}`);
   }

@@ -47,6 +47,7 @@ const ACTION_LABEL: Record<string, { jp: string; desc: string; color: string }> 
   KEEP:          { jp: 'そのまま', desc: '問題なし。両方を残す', color: '#2ecc71' },
   DELETE:        { jp: '削除', desc: 'カテゴリ範囲外なので削除/移動する', color: '#7f8c8d' },
   SPLIT:         { jp: '分割', desc: '1つの記事を複数に分ける', color: '#9b59b6' },
+  MANUAL_REVIEW: { jp: '人手判断', desc: 'グラフ正規化で衝突解消のため降格された候補。人手で取捨選択', color: '#16a085' },
 };
 
 const RATIONALE_JP: Record<string, string> = {
@@ -63,6 +64,10 @@ const RATIONALE_JP: Record<string, string> = {
   normal_v_axis: '同じ商品の異なるテーマ記事 = 通常の関係',
   classification_mismatch_or_differentiated: 'カテゴリ判定が間違っているか、すでに差別化済み',
   reassign_then_re_evaluate: 'カテゴリを再判定する必要あり',
+  'demoted:multi_target_demoted': '⚠️ もっとスコア高い別 winner に統合される予定 (本ペアは保留)',
+  'demoted:role_conflict_loser_dominant': '⚠️ ロール衝突: loser 側が優勢',
+  'demoted:role_conflict_winner_dominant': '⚠️ ロール衝突: winner 側が優勢',
+  'demoted:role_conflict_equal': '⚠️ ロール衝突 (同数) のため全保留',
   skip_quarantined: 'どちらかが範囲外なのでスキップ',
   default_keep: '問題は見つからなかった',
   low_relevance: 'カードローン領域から離れている',
@@ -150,7 +155,7 @@ export function DecisionsView() {
 
       {summary && (
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', margin: '0.5rem 0 0.75rem' }}>
-          {(['CONSOLIDATE', 'DIFFERENTIATE', 'SPLIT', 'REASSIGN', 'KEEP', 'DELETE'] as const).map((a) => {
+          {(['CONSOLIDATE', 'MANUAL_REVIEW', 'DIFFERENTIATE', 'SPLIT', 'REASSIGN', 'KEEP', 'DELETE'] as const).map((a) => {
             const lbl = ACTION_LABEL[a]!;
             const n = counts.get(a) ?? 0;
             const isActive = action === a;
