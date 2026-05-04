@@ -3,23 +3,25 @@ import { ArticlesView } from './ArticlesView.js';
 import { DashboardView } from './DashboardView.js';
 import { DecisionsView } from './DecisionsView.js';
 import { ExecuteView } from './ExecuteView.js';
+import { HeatmapView } from './HeatmapView.js';
 
-type Tab = 'dashboard' | 'articles' | 'decisions' | 'execute';
+type Tab = 'overview' | 'heatmap' | 'decisions' | 'execute' | 'articles';
 
 const TABS: Array<{ key: Tab; label: string; desc: string }> = [
-  { key: 'dashboard', label: '📊 ダッシュボード', desc: '全体の分析結果を可視化' },
-  { key: 'decisions', label: '① 候補をレビュー', desc: 'engine の判定を1件ずつ承認/却下' },
-  { key: 'execute',   label: '② 実行プレビュー',  desc: '承認済の統合をまとめて確認 → 一括実行' },
-  { key: 'articles',  label: '記事一覧',          desc: '全 434 記事の検索/フィルタ' },
+  { key: 'overview',  label: '📊 Overview',  desc: 'KPI とサマリ' },
+  { key: 'heatmap',   label: '🗺️ Heatmap',  desc: 'subtopic × 商品軸 ヒートマップ' },
+  { key: 'decisions', label: '① レビュー',   desc: 'engine の判定を承認/却下' },
+  { key: 'execute',   label: '② 実行',       desc: '承認済みを一括実行' },
+  { key: 'articles',  label: '📋 記事一覧',   desc: '434 記事の検索/フィルタ' },
 ];
 
 export function App() {
-  const [tab, setTab] = useState<Tab>('decisions');
+  const [tab, setTab] = useState<Tab>('heatmap');
 
   return (
     <>
-      <header style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', marginBottom: '0.5rem' }}>
-        <h1 style={{ flex: 1, margin: 0 }}>cannibalization-system</h1>
+      <header style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+        <h1 style={{ flex: 1, margin: 0, minWidth: '15rem' }}>cannibalization-system</h1>
         {TABS.map((t) => (
           <button
             key={t.key}
@@ -33,7 +35,8 @@ export function App() {
           </button>
         ))}
       </header>
-      {tab === 'dashboard' && <DashboardView />}
+      {tab === 'overview' && <DashboardView />}
+      {tab === 'heatmap' && <HeatmapView />}
       {tab === 'articles' && <ArticlesView />}
       {tab === 'decisions' && <DecisionsView />}
       {tab === 'execute' && <ExecuteView />}
