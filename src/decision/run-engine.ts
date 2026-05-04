@@ -35,7 +35,13 @@ function getArticleMetrics(db: Database.Database, articleId: number): ArticleMet
               COALESCE(p.clicks, 0)        AS clicks,
               COALESCE(p.impressions, 0)   AS impressions,
               COALESCE(p.ctr, 0)           AS ctr,
-              COALESCE(p.avg_position, 0)  AS avg_position
+              COALESCE(p.avg_position, 0)  AS avg_position,
+              COALESCE(a.internal_links_in, 0)        AS internal_links_in,
+              COALESCE(a.unique_brands_count, 0)      AS unique_brands_count,
+              COALESCE(a.total_brand_mentions, 0)     AS total_brand_mentions,
+              COALESCE(a.url_quality_score, 0)        AS url_quality_score,
+              COALESCE(a.freshness_score, 0)          AS freshness_score,
+              COALESCE(a.consolidate_winner_count, 0) AS consolidate_winner_count
          FROM master_articles a
     LEFT JOIN article_performance_snapshots p
            ON p.article_id = a.article_id AND p.window_days = ?

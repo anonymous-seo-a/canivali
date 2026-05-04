@@ -118,13 +118,28 @@ async function main() {
 
   const articles = db
     .prepare(
-      `SELECT article_id, title, body_text, article_embedding
-         FROM master_articles
-        WHERE article_embedding IS NOT NULL
-          AND category_quarantine != 'confirmed'
-          AND body_text IS NOT NULL`,
+      `SELECT a.article_id, a.title, a.body_text, a.article_embedding,
+              COALESCE(p.clicks, 0) AS clicks,
+              COALESCE(a.consolidate_winner_count, 0) AS winner_count,
+              COALESCE(a.internal_links_in, 0) AS in_links
+         FROM master_articles a
+    LEFT JOIN article_performance_snapshots p ON p.article_id = a.article_id AND p.window_days = 90
+        WHERE a.article_embedding IS NOT NULL
+          AND a.category_quarantine != 'confirmed'
+          AND a.body_text IS NOT NULL`,
     )
-    .all() as Array<{ article_id: number; title: string; body_text: string; article_embedding: Buffer }>;
+    .all() as Array<{
+      article_id: number;
+      title: string;
+      body_text: string;
+      article_embedding: Buffer;
+      clicks: number;
+      winner_count: number;
+      in_links: number;
+    }>;
+
+  // Q4: ハブ記事は SPLIT 候補から除外 (派生子記事の派生は許可だが SPLIT (親解体) は禁止)
+  const skipped: Array<{ id: number; reason: string; clicks: number; winner_count: number; in_links: number }> = [];
 
   // 全記事の (top1 - top2) margin を計算 → 小さい順に並べる
   const ranked: Array<{
@@ -138,6 +153,11 @@ async function main() {
     margin: number;
   }> = [];
   for (const a of articles) {
+    // Q4 ハブ判定
+    if (a.clicks >= 200 || a.winner_count >= 3 || a.in_links >= 20) {
+      skipped.push({ id: a.article_id, reason: 'hub_article', clicks: a.clicks, winner_count: a.winner_count, in_links: a.in_links });
+      continue;
+    }
     const vec = blobToVector(a.article_embedding);
     const tops = topTwoSubtopics(vec, subtopics);
     if (!tops) continue;
@@ -159,6 +179,10 @@ async function main() {
 
   console.log(`=== split candidates (margin <= ${AMBIGUITY_MARGIN_MAX}) ===`);
   console.log(`total ambiguous: ${ranked.length}, evaluating top ${candidates.length}`);
+  console.log(`hub articles skipped: ${skipped.length}`);
+  if (skipped.length > 0) {
+    for (const s of skipped.slice(0, 5)) console.log(`  - [${s.id}] clicks=${s.clicks} winner_count=${s.winner_count} in_links=${s.in_links}`);
+  }
 
   if (dryRun) {
     for (const c of candidates) {

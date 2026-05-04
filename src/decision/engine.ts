@@ -33,6 +33,13 @@ export type ArticleMetrics = {
   impressions: number;
   ctr: number;
   avg_position: number;
+  // Phase 6 features
+  internal_links_in: number;
+  unique_brands_count: number;
+  total_brand_mentions: number;
+  url_quality_score: number;
+  freshness_score: number;
+  consolidate_winner_count: number;
 };
 
 export type PairMetrics = {
@@ -142,27 +149,55 @@ export function decideArticle(m: ArticleMetrics): Decision {
 
 // =========================================================
 // Winner selection (CONSOLIDATE 時にどちらを残すか)
+// Phase 6 改訂式 (Claude consultation Q2 反映):
+//   clicks/imps の重みを縮小し、資産価値 (internal_links_in / freshness / url_quality)
+//   と Google 評価 (avg_position) を重み加算。
+//   バックリンク (Ahrefs 等) は未取得のため backlinks 重み 0.12 を internal_links_in に統合 (= 0.22)。
 // =========================================================
 
 export function selectWinner(
   a: ArticleMetrics,
   b: ArticleMetrics,
 ): { winner: ArticleMetrics; loser: ArticleMetrics; score_a: number; score_b: number } {
-  // パフォーマンス因子は impression 全体で割って正規化
   const totalImp = (a.impressions || 0) + (b.impressions || 0) || 1;
   const totalClk = (a.clicks || 0) + (b.clicks || 0) || 1;
+  const totalIn = (a.internal_links_in || 0) + (b.internal_links_in || 0) || 1;
 
   const scoreOf = (x: ArticleMetrics): number => {
-    const clicksNorm = (x.clicks || 0) / totalClk;          // 重み 0.5
-    const impsNorm = (x.impressions || 0) / totalImp;       // 重み 0.3
-    const relNorm = x.business_relevance_score ?? 0;        // 重み 0.2 (0..1)
-    return 0.5 * clicksNorm + 0.3 * impsNorm + 0.2 * relNorm;
+    const clicksNorm = (x.clicks || 0) / totalClk;
+    const impsNorm = (x.impressions || 0) / totalImp;
+    const inLinksNorm = (x.internal_links_in || 0) / totalIn;
+    const relNorm = x.business_relevance_score ?? 0;
+    // avg_position: lower is better. 1 位 = 1.0, 100 位 = 0.0
+    const positionScore = x.avg_position > 0 ? Math.max(0, 1 - x.avg_position / 100) : 0;
+    const freshness = x.freshness_score ?? 0;
+    const urlQ = x.url_quality_score ?? 0;
+    return (
+      0.25 * clicksNorm +
+      0.15 * impsNorm +
+      0.15 * positionScore +
+      0.15 * relNorm +
+      0.22 * inLinksNorm + // backlinks(0.12) + internal_links_in(0.10) を統合
+      0.05 * freshness +
+      0.03 * urlQ
+    );
   };
 
   const sa = scoreOf(a);
   const sb = scoreOf(b);
   if (sa >= sb) return { winner: a, loser: b, score_a: sa, score_b: sb };
   return { winner: b, loser: a, score_a: sa, score_b: sb };
+}
+
+// =========================================================
+// Hub article: SPLIT を抑制すべき主要記事の判定 (Q4)
+// =========================================================
+export function isHubArticle(a: ArticleMetrics): boolean {
+  return (
+    a.clicks >= 200 ||                  // 90日 200 clicks 以上
+    a.consolidate_winner_count >= 3 ||  // 3記事以上の winner
+    a.internal_links_in >= 20           // 内部権威ハブ
+  );
 }
 
 // =========================================================
@@ -198,26 +233,91 @@ export function decidePair(p: PairMetrics): Decision {
   scores.winner_id = winner.article_id;
 
   // ====== KW ジャッカードゲート (CONSOLIDATE 判定の前提) ======
-  // KW が極端に違うペアは「Google が別意図と判断」しているので CONSOLIDATE しない。
-  // ただし、両者の GSC データが存在する場合のみ適用 (新規記事や低トラフィックは除外)。
   const hasKwData =
     p.kw_jaccard !== null &&
     p.kw_overlap_count !== null &&
-    (p.a.impressions > 50 || p.b.impressions > 50); // どちらかが GSC でランクしてる
+    (p.a.impressions > 50 || p.b.impressions > 50);
+  const bothImps = Math.min(p.a.impressions, p.b.impressions);
+  const posGap = Math.abs((p.a.avg_position ?? 0) - (p.b.avg_position ?? 0));
+
+  // ====== Q1 失敗パターン 1: SERP 分離 (両者高トラ + cosine 高 + KW 0 + SERP 別) ======
+  // Voyage embedding は表層意味で寄せるが、Google が別意図と判定している兆候。
+  if (
+    p.cosine_similarity >= 0.95 &&
+    (p.kw_jaccard ?? 0) < 0.05 &&
+    (p.serp_overlap_pct ?? 1) < 0.3 &&
+    bothImps > 100
+  ) {
+    factors.push('cosine_high_but_serp_diverged');
+    return {
+      action: 'DIFFERENTIATE',
+      confidence: 0.85,
+      rationale: { factors, scores },
+    };
+  }
+
+  // ====== Q1 失敗パターン 2: avg_position 乖離 ======
+  // 同じ KW で一方が安定上位、他方が圏外なら、Google は両者を別評価している。
+  if (posGap >= 15 && (p.serp_overlap_pct ?? 1) < 0.3 && bothImps > 50) {
+    factors.push('position_gap_serp_split');
+    return {
+      action: 'DIFFERENTIATE',
+      confidence: 0.8,
+      rationale: { factors, scores },
+    };
+  }
+  const positionPenalty = posGap >= 15 && (p.serp_overlap_pct ?? 0) >= 0.5 ? 0.1 : 0;
+
+  // ====== Q1 失敗パターン 3: ブランド多様性ミスマッチ (比較記事 vs 単体特集) ======
+  const brandGap = Math.abs((p.a.unique_brands_count ?? 0) - (p.b.unique_brands_count ?? 0));
+  if (brandGap >= 5) {
+    factors.push('brand_diversity_gap');
+    return {
+      action: 'DIFFERENTIATE',
+      confidence: 0.9,
+      rationale: { factors, scores },
+    };
+  }
 
   // === Same cell (subtopic + V 両方一致) ===
   if (p.pair_relation === 'same_cell') {
     if (hasKwData && (p.kw_jaccard ?? 0) < JACCARD_LOW) {
-      factors.push('same_cell', `kw_jaccard<${JACCARD_LOW}`, 'intent_diverged');
+      // ====== Q3: KW jaccard 0 + 高 cosine + 同セル の 3 段判定 ======
+      // Stage 1: SERP overlap が決め手
+      if ((p.serp_overlap_pct ?? -1) >= 0.5) {
+        factors.push('same_cell', 'kw_diverged_but_serp_aligned');
+        return {
+          action: 'CONSOLIDATE',
+          confidence: 0.82 - positionPenalty,
+          target_article_id: winner.article_id,
+          target_url: winner.url,
+          rationale: { factors, scores },
+        };
+      }
+      if ((p.serp_overlap_pct ?? 1) < 0.2) {
+        factors.push('same_cell', 'kw_diverged_serp_split');
+        return {
+          action: 'DIFFERENTIATE',
+          confidence: 0.85,
+          rationale: { factors, scores },
+        };
+      }
+      // Stage 3: 中間域 → 可逆側 (KEEP) で人手レビュー要
+      factors.push('same_cell', 'kw_diverged_serp_unclear', 'manual_review');
       return {
-        action: 'DIFFERENTIATE',
-        confidence: 0.65,
+        action: 'KEEP',
+        confidence: 0.4,
         rationale: { factors, scores },
       };
     }
     if (p.cosine_similarity >= 0.95) {
       factors.push('same_cell', 'cosine>=0.95');
-      const conf = hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_HIGH ? 0.97 : hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_OK ? 0.93 : 0.85;
+      const conf =
+        hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_HIGH
+          ? 0.97 - positionPenalty
+          : hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_OK
+            ? 0.93 - positionPenalty
+            : 0.85 - positionPenalty;
       return {
         action: 'CONSOLIDATE',
         confidence: conf,
@@ -228,7 +328,7 @@ export function decidePair(p: PairMetrics): Decision {
     }
     if (p.cosine_similarity >= 0.9) {
       factors.push('same_cell', 'cosine>=0.9');
-      const conf = hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_OK ? 0.85 : 0.75;
+      const conf = (hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_OK ? 0.85 : 0.75) - positionPenalty;
       return {
         action: 'CONSOLIDATE',
         confidence: conf,
@@ -240,7 +340,7 @@ export function decidePair(p: PairMetrics): Decision {
     factors.push('same_cell', 'cosine_in_0.85-0.9');
     return {
       action: 'CONSOLIDATE',
-      confidence: hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_OK ? 0.72 : 0.6,
+      confidence: (hasKwData && (p.kw_jaccard ?? 0) >= JACCARD_OK ? 0.72 : 0.6) - positionPenalty,
       target_article_id: winner.article_id,
       target_url: winner.url,
       rationale: { factors, scores },

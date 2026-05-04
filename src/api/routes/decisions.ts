@@ -206,10 +206,33 @@ decisionsRouter.post('/_/execute', (req, res) => {
     return;
   }
 
-  // 本実行: WP REST API で各 loser を draft 化 + redirect meta 保存
-  void executeWpConsolidation(plan)
-    .then((summary) => {
-      recordAudit(getDb(), {
+  // 本実行:
+  //   1. .htaccess に 301 を反映 (チェーン解決済み、B→C 含む全 hop)
+  //   2. WP REST API で各 loser を draft 化 + redirect meta 保存
+  // 順序が重要: 301 を先に置かないと WP draft化のタイミングで一時的に 404 が露出する
+  void (async () => {
+    const db = getDb();
+    try {
+      // (1) 301 reverse-deploy
+      const r = resolveWithTraffic(db, mode as 'approved' | 'auto' | 'all');
+      if (r.resolved.length > 0) {
+        const dep = await deployRedirects(r.resolved);
+        recordAudit(db, {
+          entityType: 'decision_log',
+          entityId: 'execute_redirects',
+          action: 'execute',
+          after: { mode, ...dep, chains: r.chains.length, cycles: r.cycles.length },
+          actor: 'human:ui',
+          reason: 'auto: 301 deployed before WP draft',
+        });
+      }
+    } catch (e) {
+      logger.error({ err: e instanceof Error ? e.message : String(e) }, 'redirect deploy failed');
+    }
+    try {
+      // (2) WP draft化 + baseline 記録
+      const summary = await executeWpConsolidation(plan);
+      recordAudit(db, {
         entityType: 'decision_log',
         entityId: 'execute_wp',
         action: 'execute',
@@ -217,15 +240,15 @@ decisionsRouter.post('/_/execute', (req, res) => {
         actor: 'human:ui',
         reason: 'WP consolidation executed',
       });
-    })
-    .catch((e) => {
+    } catch (e) {
       logger.error({ err: e instanceof Error ? e.message : String(e) }, 'wp execute background error');
-    });
+    }
+  })();
 
   res.json({
     ok: true,
     dry_run: false,
-    message: `${plan.length} 件の統合をバックグラウンドで実行中。完了は audit log を確認。`,
+    message: `${plan.length} 件の統合をバックグラウンドで実行中 (301反映 → WP draft化の順)。完了は audit log を確認。`,
     plan_size: plan.length,
   });
 });
