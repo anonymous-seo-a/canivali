@@ -27,6 +27,9 @@
     "embed:pairs": "tsx src/embedding/pair-similarity.ts",
     "pull:gsc": "tsx src/ingestion/gsc-pull.ts",
     "pull:serp-overlap": "tsx src/ingestion/serp-overlap.ts",
+    "decide:cell-relation": "tsx src/decision/cell-relation.ts",
+    "decide:run": "tsx src/decision/run-engine.ts",
+    "decide:pilot": "tsx src/decision/pilot-eval.ts",
     "verify:env": "tsx scripts/verify-env.ts",
     "verify:db": "tsx scripts/verify-db.ts"
   },

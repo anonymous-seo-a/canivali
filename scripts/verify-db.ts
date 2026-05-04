@@ -159,6 +159,57 @@ const checks: Check[] = [
       return { ok: c >= 20, got: `${c}` };
     },
   },
+  // ---------- Phase 3 (Decision) ----------
+  {
+    name: '[P3] schema_migrations contains 0.3.0',
+    sql: "SELECT COUNT(*) AS c FROM schema_migrations WHERE version = '0.3.0'",
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 1, got: `${c}` };
+    },
+  },
+  {
+    name: '[P3] pair_relation populated for all pairs',
+    sql: 'SELECT COUNT(*) AS c FROM cannibalization_pairs WHERE pair_relation IS NULL',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 0, got: `null=${c}` };
+    },
+  },
+  {
+    name: '[P3] decision_log has CONSOLIDATE candidates',
+    sql: "SELECT COUNT(*) AS c FROM decision_log WHERE action='CONSOLIDATE'",
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 1, got: `${c}` };
+    },
+  },
+  {
+    name: '[P3] decision_log has high-confidence (>=0.85) decisions',
+    sql: 'SELECT COUNT(*) AS c FROM decision_log WHERE confidence_score >= 0.85',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 1, got: `${c}` };
+    },
+  },
+  {
+    name: '[P3] cannibalization_pairs winner assigned for CONSOLIDATE',
+    sql: `SELECT COUNT(*) AS c FROM cannibalization_pairs cp
+            JOIN decision_log dl ON dl.pair_id = cp.pair_id AND dl.action='CONSOLIDATE'
+           WHERE cp.winner_article_id IS NULL`,
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 0, got: `missing=${c}` };
+    },
+  },
+  {
+    name: '[P3] gsc snapshots include 90/180/365 windows',
+    sql: 'SELECT COUNT(DISTINCT window_days) AS c FROM gsc_query_url_snapshots',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 3, got: `${c}` };
+    },
+  },
 ];
 
 function main() {
