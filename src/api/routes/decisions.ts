@@ -14,18 +14,18 @@ decisionsRouter.get('/', (req, res) => {
   const minConf = Number(req.query.min_conf ?? 0);
   const kind = typeof req.query.kind === 'string' ? req.query.kind : null; // 'article' | 'pair'
 
-  const where: string[] = ['confidence_score >= @minConf'];
+  const where: string[] = ['dl.confidence_score >= @minConf'];
   const params: Record<string, unknown> = { limit, offset, minConf };
   if (action) {
-    where.push('action = @action');
+    where.push('dl.action = @action');
     params.action = action;
   }
   if (reviewed !== null) {
-    where.push('human_reviewed = @reviewed');
+    where.push('dl.human_reviewed = @reviewed');
     params.reviewed = reviewed;
   }
-  if (kind === 'article') where.push('article_id IS NOT NULL AND pair_id IS NULL');
-  if (kind === 'pair') where.push('pair_id IS NOT NULL');
+  if (kind === 'article') where.push('dl.article_id IS NOT NULL AND dl.pair_id IS NULL');
+  if (kind === 'pair') where.push('dl.pair_id IS NOT NULL');
   const whereSql = `WHERE ${where.join(' AND ')}`;
 
   const totalRow = db.prepare(`SELECT COUNT(*) AS c FROM decision_log ${whereSql}`).all(params) as Array<{ c: number }>;
