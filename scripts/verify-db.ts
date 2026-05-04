@@ -53,11 +53,11 @@ const checks: Check[] = [
     },
   },
   {
-    name: "category_quarantine='pending' = 5",
+    name: "category_quarantine='pending' (5 in P1 / 0 after P2)",
     sql: "SELECT COUNT(*) AS c FROM master_articles WHERE category_quarantine='pending'",
     predicate: (rows) => {
       const c = (rows[0] as { c: number }).c;
-      return { ok: c === 5, got: `${c}` };
+      return { ok: c === 5 || c === 0, got: `${c}` };
     },
   },
   {
@@ -74,6 +74,140 @@ const checks: Check[] = [
     predicate: (rows) => {
       const c = (rows[0] as { c: number }).c;
       return { ok: c === 434, got: `${c}` };
+    },
+  },
+  // ---------- Phase 2 (Semantic) ----------
+  {
+    name: '[P2] schema_migrations contains 0.2.0',
+    sql: "SELECT COUNT(*) AS c FROM schema_migrations WHERE version = '0.2.0'",
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 1, got: `${c}` };
+    },
+  },
+  {
+    name: "[P2] in_scope+pending articles embedded",
+    sql: `SELECT
+            (SELECT COUNT(*) FROM master_articles WHERE category_quarantine != 'confirmed') AS expected,
+            (SELECT COUNT(*) FROM master_articles WHERE article_embedding IS NOT NULL AND category_quarantine != 'confirmed') AS got`,
+    predicate: (rows) => {
+      const r = rows[0] as { expected: number; got: number };
+      return { ok: r.got === r.expected, got: `${r.got}/${r.expected}` };
+    },
+  },
+  {
+    name: '[P2] business_relevance_score populated',
+    sql: 'SELECT COUNT(*) AS c FROM master_articles WHERE business_relevance_score IS NOT NULL',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 425, got: `${c}` };
+    },
+  },
+  {
+    name: "[P2] pending resolved (== 0 still pending)",
+    sql: "SELECT COUNT(*) AS c FROM master_articles WHERE category_quarantine = 'pending'",
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 0, got: `${c}` };
+    },
+  },
+  {
+    name: '[P2] business_relevance_embeddings has v',
+    sql: 'SELECT COUNT(*) AS c FROM business_relevance_embeddings',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 1, got: `${c}` };
+    },
+  },
+  {
+    name: '[P2] topic centroids built (>= 100)',
+    sql: 'SELECT COUNT(*) AS c FROM master_topics WHERE centroid_vector IS NOT NULL',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 100, got: `${c}` };
+    },
+  },
+  {
+    name: '[P2] cannibalization_pairs has high-severity entries',
+    sql: "SELECT COUNT(*) AS c FROM cannibalization_pairs WHERE severity = 'high'",
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 100, got: `${c}` };
+    },
+  },
+  {
+    name: '[P2] gsc_query_url_snapshots populated',
+    sql: 'SELECT COUNT(*) AS c, COUNT(DISTINCT article_id) AS articles FROM gsc_query_url_snapshots',
+    predicate: (rows) => {
+      const r = rows[0] as { c: number; articles: number };
+      return { ok: r.c >= 10_000 && r.articles >= 400, got: `rows=${r.c} articles=${r.articles}` };
+    },
+  },
+  {
+    name: '[P2] article_performance_snapshots aggregated',
+    sql: 'SELECT COUNT(*) AS c FROM article_performance_snapshots',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 400, got: `${c}` };
+    },
+  },
+  {
+    name: '[P2] cannibalization_pairs serp_overlap evaluated (>=20)',
+    sql: 'SELECT COUNT(*) AS c FROM cannibalization_pairs WHERE serp_overlap_pct IS NOT NULL',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 20, got: `${c}` };
+    },
+  },
+  // ---------- Phase 3 (Decision) ----------
+  {
+    name: '[P3] schema_migrations contains 0.3.0',
+    sql: "SELECT COUNT(*) AS c FROM schema_migrations WHERE version = '0.3.0'",
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 1, got: `${c}` };
+    },
+  },
+  {
+    name: '[P3] pair_relation populated for all pairs',
+    sql: 'SELECT COUNT(*) AS c FROM cannibalization_pairs WHERE pair_relation IS NULL',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 0, got: `null=${c}` };
+    },
+  },
+  {
+    name: '[P3] decision_log has CONSOLIDATE candidates',
+    sql: "SELECT COUNT(*) AS c FROM decision_log WHERE action='CONSOLIDATE'",
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 1, got: `${c}` };
+    },
+  },
+  {
+    name: '[P3] decision_log has high-confidence (>=0.85) decisions',
+    sql: 'SELECT COUNT(*) AS c FROM decision_log WHERE confidence_score >= 0.85',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 1, got: `${c}` };
+    },
+  },
+  {
+    name: '[P3] cannibalization_pairs winner assigned for CONSOLIDATE',
+    sql: `SELECT COUNT(*) AS c FROM cannibalization_pairs cp
+            JOIN decision_log dl ON dl.pair_id = cp.pair_id AND dl.action='CONSOLIDATE'
+           WHERE cp.winner_article_id IS NULL`,
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 0, got: `missing=${c}` };
+    },
+  },
+  {
+    name: '[P3] gsc snapshots include 90/180/365 windows',
+    sql: 'SELECT COUNT(DISTINCT window_days) AS c FROM gsc_query_url_snapshots',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 3, got: `${c}` };
     },
   },
 ];

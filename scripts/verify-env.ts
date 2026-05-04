@@ -9,6 +9,8 @@ import { BetaAnalyticsDataClient } from '@google-analytics/data';
 import { fetch } from 'undici';
 import { getClaude, CLAUDE_DEFAULT_MODEL } from '../src/lib/claude.js';
 import { getOpenAI, EMBEDDING_MODEL } from '../src/lib/openai.js';
+import { embed, VOYAGE_MODEL } from '../src/lib/voyage.js';
+import { ping as wpPing } from '../src/lib/wordpress.js';
 import { env } from '../src/lib/env.js';
 
 type Status = '✅' | '⏭️ ' | '❌';
@@ -146,6 +148,29 @@ async function checkOpenAI(): Promise<void> {
   }
 }
 
+async function checkWP(): Promise<void> {
+  if (!env.WP_API_BASE || !env.WP_USERNAME || !env.WP_APP_PASSWORD) {
+    record('WP REST', '⏭️ ', 'env unset');
+    return;
+  }
+  const r = await wpPing();
+  if (r.ok) record('WP REST', '✅', `user=${r.user}`);
+  else record('WP REST', '❌', r.error ?? 'unknown');
+}
+
+async function checkVoyage(): Promise<void> {
+  if (!env.VOYAGE_API_KEY) {
+    record('Voyage', '⏭️ ', 'env unset');
+    return;
+  }
+  try {
+    const r = await embed(['ping']);
+    record('Voyage', '✅', `model=${VOYAGE_MODEL}, dim=${r.embeddings[0]?.length ?? 0}`);
+  } catch (e) {
+    record('Voyage', '❌', e instanceof Error ? e.message : String(e));
+  }
+}
+
 async function main() {
   console.log('=== verify-env ===');
   await checkGSC();
@@ -154,6 +179,8 @@ async function main() {
   await checkSerpAPI();
   await checkClaude();
   await checkOpenAI();
+  await checkVoyage();
+  await checkWP();
 
   const failed = results.filter((r) => r.status === '❌').length;
   const skipped = results.filter((r) => r.status === '⏭️ ').length;

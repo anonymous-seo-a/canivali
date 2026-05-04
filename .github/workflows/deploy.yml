@@ -1,0 +1,49 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-cannibalization
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Pull + build + restart on VPS
+        run: |
+          ssh -i ~/.ssh/deploy_key root@${{ secrets.VPS_HOST }} 'bash -s' <<'REMOTE'
+          set -euo pipefail
+
+          APP_DIR=/opt/cannibalization-system
+          cd "$APP_DIR"
+
+          # GitHub deploy key で main を fetch
+          GIT_SSH_COMMAND="ssh -i /root/.ssh/github_deploy" git fetch origin main
+          GIT_SSH_COMMAND="ssh -i /root/.ssh/github_deploy" git reset --hard origin/main
+
+          # 依存とビルド
+          npm ci --no-audit --no-fund
+          npm run build
+
+          # DB マイグレーションを毎回適用 (idempotent)
+          npm run db:migrate || true
+
+          # pm2 で再起動 (cannibalization-app という名前で稼働)
+          if pm2 describe cannibalization-app >/dev/null 2>&1; then
+            pm2 restart cannibalization-app --update-env
+          else
+            pm2 start npm --name cannibalization-app -- run start:prod
+          fi
+          pm2 save
+          REMOTE
