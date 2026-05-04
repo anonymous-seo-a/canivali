@@ -1,35 +1,39 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ArticlesView } from './ArticlesView.js';
 import { DecisionsView } from './DecisionsView.js';
+import { ExecuteView } from './ExecuteView.js';
 
-type Tab = 'articles' | 'decisions';
+type Tab = 'articles' | 'decisions' | 'execute';
+
+const TABS: Array<{ key: Tab; label: string; desc: string }> = [
+  { key: 'decisions', label: '① 候補をレビュー', desc: 'engine の判定を1件ずつ承認/却下' },
+  { key: 'execute',   label: '② 実行プレビュー',  desc: '承認済の統合をまとめて確認 → 一括実行' },
+  { key: 'articles',  label: '記事一覧',          desc: '全 434 記事の検索/フィルタ' },
+];
 
 export function App() {
   const [tab, setTab] = useState<Tab>('decisions');
 
   return (
     <>
-      <header style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline' }}>
-        <h1 style={{ flex: 1 }}>cannibalization-system</h1>
-        <button
-          type="button"
-          onClick={() => setTab('decisions')}
-          aria-current={tab === 'decisions'}
-          style={tabStyle(tab === 'decisions')}
-        >
-          Decisions
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab('articles')}
-          aria-current={tab === 'articles'}
-          style={tabStyle(tab === 'articles')}
-        >
-          Articles
-        </button>
+      <header style={{ display: 'flex', gap: '0.5rem', alignItems: 'baseline', marginBottom: '0.5rem' }}>
+        <h1 style={{ flex: 1, margin: 0 }}>cannibalization-system</h1>
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            onClick={() => setTab(t.key)}
+            aria-current={tab === t.key}
+            style={tabStyle(tab === t.key)}
+            title={t.desc}
+          >
+            {t.label}
+          </button>
+        ))}
       </header>
       {tab === 'articles' && <ArticlesView />}
       {tab === 'decisions' && <DecisionsView />}
+      {tab === 'execute' && <ExecuteView />}
     </>
   );
 }

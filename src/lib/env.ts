@@ -26,6 +26,10 @@ const EnvSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   VOYAGE_API_KEY: z.string().optional(),
 
+  WP_API_BASE: z.string().url().optional(),
+  WP_USERNAME: z.string().optional(),
+  WP_APP_PASSWORD: z.string().optional(),
+
   PORT: z.coerce.number().default(4040),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),

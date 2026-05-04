@@ -55,6 +55,155 @@ decisionsRouter.get('/', (req, res) => {
   res.json({ total, items: rows });
 });
 
+decisionsRouter.get('/_/preview', (req, res) => {
+  // 「実行プレビュー」用: 承認済 (or 全候補 / 自動承認候補) の CONSOLIDATE をペア単位で詳細列挙する。
+  // mode = 'approved' (default) | 'auto' (conf >= 0.85) | 'all' (any unrejected)
+  const db = getDb();
+  const mode = (req.query.mode as string) || 'approved';
+
+  let filter: string;
+  if (mode === 'auto') {
+    filter = "dl.action='CONSOLIDATE' AND dl.confidence_score >= 0.85 AND (dl.human_reviewed = 0 OR (dl.human_reviewed = 1 AND (dl.human_decision IS NULL OR dl.human_decision != 'REJECTED')))";
+  } else if (mode === 'all') {
+    filter = "dl.action='CONSOLIDATE' AND (dl.human_reviewed = 0 OR (dl.human_reviewed = 1 AND (dl.human_decision IS NULL OR dl.human_decision != 'REJECTED')))";
+  } else {
+    filter = "dl.action='CONSOLIDATE' AND dl.human_reviewed = 1 AND (dl.human_decision IS NULL OR dl.human_decision != 'REJECTED')";
+  }
+
+  const rows = db
+    .prepare(
+      `SELECT dl.decision_id, dl.confidence_score, dl.rationale_json,
+              dl.human_reviewed, dl.human_decision,
+              cp.pair_id, cp.cosine_similarity, cp.serp_overlap_pct, cp.pair_relation, cp.severity,
+              cp.winner_article_id,
+              wa.article_id AS winner_id, wa.url AS winner_url, wa.title AS winner_title,
+              wa.subtopic_topic_id AS winner_sub, wa.vocabulary_topic_id AS winner_v,
+              pw.clicks AS winner_clicks, pw.impressions AS winner_impressions, pw.avg_position AS winner_pos,
+              la.article_id AS loser_id, la.url AS loser_url, la.title AS loser_title,
+              la.subtopic_topic_id AS loser_sub, la.vocabulary_topic_id AS loser_v,
+              pl.clicks AS loser_clicks, pl.impressions AS loser_impressions, pl.avg_position AS loser_pos
+         FROM decision_log dl
+         JOIN cannibalization_pairs cp ON cp.pair_id = dl.pair_id
+         JOIN master_articles wa ON wa.article_id = cp.winner_article_id
+         JOIN master_articles la
+           ON la.article_id = CASE WHEN cp.winner_article_id = cp.article_a_id THEN cp.article_b_id ELSE cp.article_a_id END
+    LEFT JOIN article_performance_snapshots pw ON pw.article_id = wa.article_id AND pw.window_days = 90
+    LEFT JOIN article_performance_snapshots pl ON pl.article_id = la.article_id AND pl.window_days = 90
+        WHERE ${filter}
+        ORDER BY dl.confidence_score DESC, cp.cosine_similarity DESC`,
+    )
+    .all() as Array<{
+    decision_id: number;
+    confidence_score: number;
+    rationale_json: string;
+    human_reviewed: number;
+    human_decision: string | null;
+    pair_id: number;
+    cosine_similarity: number;
+    serp_overlap_pct: number | null;
+    pair_relation: string | null;
+    severity: string;
+    winner_article_id: number;
+    winner_id: number;
+    winner_url: string;
+    winner_title: string;
+    winner_sub: string | null;
+    winner_v: string | null;
+    winner_clicks: number | null;
+    winner_impressions: number | null;
+    winner_pos: number | null;
+    loser_id: number;
+    loser_url: string;
+    loser_title: string;
+    loser_sub: string | null;
+    loser_v: string | null;
+    loser_clicks: number | null;
+    loser_impressions: number | null;
+    loser_pos: number | null;
+  }>;
+
+  // loser ベースで dedup (1 つの記事が複数の winner にまとめられる候補になるケース → 最高 confidence のものだけ残す)
+  const byLoser = new Map<number, (typeof rows)[number]>();
+  for (const r of rows) {
+    const cur = byLoser.get(r.loser_id);
+    if (!cur || r.confidence_score > cur.confidence_score) byLoser.set(r.loser_id, r);
+  }
+
+  const dedup = [...byLoser.values()];
+  const totalArticles = (db.prepare('SELECT COUNT(*) AS c FROM master_articles').get() as { c: number }).c;
+  const finalCount = totalArticles - dedup.length;
+
+  res.json({
+    mode,
+    plan_count: dedup.length,
+    raw_count: rows.length,
+    final_article_count: finalCount,
+    items: dedup,
+  });
+});
+
+decisionsRouter.post('/_/execute', (req, res) => {
+  // 統合実行。現状は dry-run (DB に execution_plan を記録 / 実行ログを残す) のみ。
+  // WP REST API クライアントが揃ったら本処理に差し替える。
+  const db = getDb();
+  const { mode = 'approved', dry_run = true } = req.body as { mode?: string; dry_run?: boolean };
+
+  // preview と同じ条件
+  const previewReq = { query: { mode } } as unknown as Parameters<typeof decisionsRouter.get>[1];
+  // 簡易呼び出し
+  const filterClause =
+    mode === 'auto'
+      ? "dl.action='CONSOLIDATE' AND dl.confidence_score >= 0.85 AND (dl.human_reviewed = 0 OR (dl.human_reviewed = 1 AND (dl.human_decision IS NULL OR dl.human_decision != 'REJECTED')))"
+      : mode === 'all'
+        ? "dl.action='CONSOLIDATE' AND (dl.human_reviewed = 0 OR (dl.human_reviewed = 1 AND (dl.human_decision IS NULL OR dl.human_decision != 'REJECTED')))"
+        : "dl.action='CONSOLIDATE' AND dl.human_reviewed = 1 AND (dl.human_decision IS NULL OR dl.human_decision != 'REJECTED')";
+
+  const items = db
+    .prepare(
+      `SELECT dl.decision_id, cp.pair_id, cp.winner_article_id,
+              CASE WHEN cp.winner_article_id = cp.article_a_id THEN cp.article_b_id ELSE cp.article_a_id END AS loser_id,
+              wa.url AS winner_url, la.url AS loser_url
+         FROM decision_log dl
+         JOIN cannibalization_pairs cp ON cp.pair_id = dl.pair_id
+         JOIN master_articles wa ON wa.article_id = cp.winner_article_id
+         JOIN master_articles la
+           ON la.article_id = CASE WHEN cp.winner_article_id = cp.article_a_id THEN cp.article_b_id ELSE cp.article_a_id END
+        WHERE ${filterClause}`,
+    )
+    .all() as Array<{ decision_id: number; pair_id: number; winner_article_id: number; loser_id: number; winner_url: string; loser_url: string }>;
+
+  const byLoser = new Map<number, (typeof items)[number]>();
+  for (const r of items) byLoser.set(r.loser_id, r);
+  const plan = [...byLoser.values()];
+
+  // 実行ログ
+  recordAudit(db, {
+    entityType: 'decision_log',
+    entityId: 'execute',
+    action: 'execute',
+    after: { mode, dry_run, plan_size: plan.length, plan: plan.slice(0, 50) },
+    actor: 'human:ui',
+    reason: dry_run ? 'dry-run preview' : 'execute consolidation',
+  });
+
+  if (dry_run) {
+    res.json({
+      ok: true,
+      dry_run: true,
+      message: `${plan.length} 件の統合計画を生成しました (実行はされていません)`,
+      plan,
+    });
+    return;
+  }
+
+  // 本実行: WP REST API 統合 (未実装)
+  res.status(501).json({
+    ok: false,
+    error: 'WordPress REST API integration not yet configured. Set WP_API_BASE and WP_APP_PASSWORD in .env first.',
+    plan_size: plan.length,
+  });
+});
+
 decisionsRouter.get('/_/impact', (_req, res) => {
   const db = getDb();
   // 全ての CONSOLIDATE 判定 (未承認 + 承認済) を見て、
