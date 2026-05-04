@@ -6,6 +6,7 @@ import { logger } from '../lib/logger.js';
 import { articlesRouter } from './routes/articles.js';
 import { decisionsRouter } from './routes/decisions.js';
 import { healthRouter } from './routes/health.js';
+import { statsRouter } from './routes/stats.js';
 import { topicsRouter } from './routes/topics.js';
 
 const app = express();
@@ -15,6 +16,7 @@ app.use('/health', healthRouter);
 app.use('/api/articles', articlesRouter);
 app.use('/api/topics', topicsRouter);
 app.use('/api/decisions', decisionsRouter);
+app.use('/api/stats', statsRouter);
 
 // 本番モード: Vite で build した dist/ui/ を Express から serve
 const distUi = resolve('dist/ui');

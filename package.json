@@ -33,6 +33,7 @@
     "decide:pilot": "tsx src/decision/pilot-eval.ts",
     "decide:reassign-target": "tsx src/decision/reassign-target.ts",
     "decide:split": "tsx src/decision/split-detect.ts",
+    "decide:lift": "tsx src/decision/compute-lift.ts",
     "verify:env": "tsx scripts/verify-env.ts",
     "verify:db": "tsx scripts/verify-db.ts"
   },

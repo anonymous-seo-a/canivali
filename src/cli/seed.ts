@@ -44,6 +44,7 @@ function applyMigrations(): void {
 const MIGRATION_VERSIONS: Record<string, string> = {
   '0002_phase2_embeddings.sql': '0.2.0',
   '0003_phase3_decision.sql': '0.3.0',
+  '0004_lift_tracking.sql': '0.4.0',
 };
 
 function applySeeds(): void {

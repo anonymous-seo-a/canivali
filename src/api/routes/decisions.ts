@@ -2,6 +2,12 @@ import { Router } from 'express';
 import { getDb, recordAudit } from '../../lib/db.js';
 import { consolidateLoser, findPostByUrl } from '../../lib/wordpress.js';
 import { logger } from '../../lib/logger.js';
+import {
+  buildHtaccessBlock,
+  deployRedirects,
+  loadApprovedRedirects,
+  verifyRedirect,
+} from '../../lib/redirect-deploy.js';
 
 export const decisionsRouter: Router = Router();
 
@@ -230,6 +236,24 @@ async function executeWpConsolidation(
   let ok = 0;
   let fail = 0;
 
+  // ベースラインを capture (実行直前 90日窓)
+  const captureBaseline = db.prepare(
+    `SELECT
+        l.clicks AS l_clicks, l.impressions AS l_imps,
+        w.clicks AS w_clicks, w.impressions AS w_imps
+       FROM (SELECT clicks, impressions FROM article_performance_snapshots WHERE article_id = ? AND window_days = 90 ORDER BY snapshot_date DESC LIMIT 1) l,
+            (SELECT clicks, impressions FROM article_performance_snapshots WHERE article_id = ? AND window_days = 90 ORDER BY snapshot_date DESC LIMIT 1) w`,
+  );
+  const insExec = db.prepare(
+    `INSERT INTO consolidation_executions (
+       pair_id, decision_id, loser_article_id, winner_article_id, executed_at,
+       baseline_window_days, baseline_loser_clicks, baseline_loser_imps,
+       baseline_winner_clicks, baseline_winner_imps,
+       baseline_combined_clicks, baseline_combined_imps,
+       lift_status
+     ) VALUES (?, ?, ?, ?, strftime('%s','now'), 90, ?, ?, ?, ?, ?, ?, 'pending')`,
+  );
+
   for (const item of plan) {
     try {
       const post = await findPostByUrl(item.loser_url);
@@ -243,11 +267,32 @@ async function executeWpConsolidation(
         winnerUrl: item.winner_url,
         reason: `auto-consolidated by canivali (decision_id=${item.decision_id})`,
       });
+      const baseline = captureBaseline.get(item.loser_id, item.winner_article_id) as {
+        l_clicks: number;
+        l_imps: number;
+        w_clicks: number;
+        w_imps: number;
+      } | undefined;
+      const lc = baseline?.l_clicks ?? 0;
+      const li = baseline?.l_imps ?? 0;
+      const wc = baseline?.w_clicks ?? 0;
+      const wi = baseline?.w_imps ?? 0;
+      insExec.run(
+        item.pair_id,
+        item.decision_id,
+        item.loser_id,
+        item.winner_article_id,
+        lc,
+        li,
+        wc,
+        wi,
+        lc + wc,
+        li + wi,
+      );
       // master_articles の status を反映
       db.prepare(
         `UPDATE master_articles SET status='consolidated', redirect_target_url=?, updated_at=strftime('%s','now') WHERE article_id = ?`,
       ).run(item.winner_url, item.loser_id);
-      // decision_log の executed_at をマーク
       db.prepare(
         `UPDATE decision_log SET executed_at=strftime('%s','now') WHERE decision_id = ?`,
       ).run(item.decision_id);
@@ -263,6 +308,50 @@ async function executeWpConsolidation(
   }
   return { ok, fail, details };
 }
+
+decisionsRouter.get('/_/htaccess', (req, res) => {
+  // .htaccess に貼り付ける用の 301 リダイレクトブロックを返す
+  const mode = (req.query.mode as 'approved' | 'auto' | 'all') || 'approved';
+  const rules = loadApprovedRedirects(getDb(), mode);
+  const block = buildHtaccessBlock(rules);
+  res.type('text/plain').send(block);
+});
+
+decisionsRouter.post('/_/deploy-redirects', (req, res) => {
+  // SSH で Xserver の /no1/.htaccess の canivali ブロックを更新
+  const mode = (req.body?.mode as 'approved' | 'auto' | 'all') || 'approved';
+  const rules = loadApprovedRedirects(getDb(), mode);
+  if (rules.length === 0) {
+    res.json({ ok: true, deployed: 0, message: 'no rules to deploy' });
+    return;
+  }
+  deployRedirects(rules)
+    .then((r) => {
+      recordAudit(getDb(), {
+        entityType: 'decision_log',
+        entityId: 'deploy_redirects',
+        action: 'execute',
+        after: { mode, ...r },
+        actor: 'human:ui',
+        reason: '.htaccess 301 deployed',
+      });
+      res.json({ ok: true, deployed: r.rules, backup: r.backup });
+    })
+    .catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      logger.error({ err: msg }, 'deploy-redirects failed');
+      res.status(500).json({ ok: false, error: msg });
+    });
+});
+
+decisionsRouter.post('/_/verify-redirect', (req, res) => {
+  const { loser_url, winner_url } = req.body as { loser_url?: string; winner_url?: string };
+  if (!loser_url || !winner_url) {
+    res.status(400).json({ error: 'loser_url and winner_url required' });
+    return;
+  }
+  verifyRedirect(loser_url, winner_url).then((r) => res.json(r));
+});
 
 decisionsRouter.get('/_/execute-status', (_req, res) => {
   // 直近の WP 実行ログを返す

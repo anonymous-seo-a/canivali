@@ -55,6 +55,54 @@ articlesRouter.get('/:id', (req, res) => {
   res.json(row);
 });
 
+articlesRouter.get('/:id/queries', (req, res) => {
+  const db = getDb();
+  const id = Number(req.params.id);
+  const window = Number(req.query.window ?? 90);
+  const limit = Math.min(Number(req.query.limit ?? 10), 50);
+  const rows = db
+    .prepare(
+      `SELECT query,
+              SUM(clicks) AS clicks,
+              SUM(impressions) AS impressions,
+              SUM(impressions * avg_position) / NULLIF(SUM(impressions),0) AS avg_position
+         FROM gsc_query_url_snapshots
+        WHERE article_id = ? AND window_days = ?
+        GROUP BY query
+        ORDER BY clicks DESC, impressions DESC
+        LIMIT ?`,
+    )
+    .all(id, window, limit);
+  res.json(rows);
+});
+
+articlesRouter.get('/:id/queries-overlap/:other', (req, res) => {
+  const db = getDb();
+  const a = Number(req.params.id);
+  const b = Number(req.params.other);
+  const window = Number(req.query.window ?? 90);
+  const rows = db
+    .prepare(
+      `WITH a AS (
+         SELECT query, SUM(clicks) AS clicks, SUM(impressions) AS imp,
+                SUM(impressions * avg_position) / NULLIF(SUM(impressions),0) AS pos
+           FROM gsc_query_url_snapshots WHERE article_id = ? AND window_days = ? GROUP BY query
+       ), b AS (
+         SELECT query, SUM(clicks) AS clicks, SUM(impressions) AS imp,
+                SUM(impressions * avg_position) / NULLIF(SUM(impressions),0) AS pos
+           FROM gsc_query_url_snapshots WHERE article_id = ? AND window_days = ? GROUP BY query
+       )
+       SELECT a.query AS query,
+              a.clicks AS a_clicks, a.imp AS a_impressions, a.pos AS a_position,
+              b.clicks AS b_clicks, b.imp AS b_impressions, b.pos AS b_position
+         FROM a JOIN b ON a.query = b.query
+        ORDER BY (a.imp + b.imp) DESC
+        LIMIT 20`,
+    )
+    .all(a, window, b, window);
+  res.json(rows);
+});
+
 articlesRouter.get('/_/cells', (_req, res) => {
   const db = getDb();
   const rows = db

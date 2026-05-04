@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 type PreviewItem = {
   decision_id: number;
@@ -64,6 +64,28 @@ export function ExecuteView() {
     fetch(`/api/decisions/_/preview?mode=${mode}`).then((r) => r.json()).then(setPreview);
   }
   useEffect(refresh, [mode]);
+
+  function deployRedirects(m: 'approved' | 'auto' | 'all') {
+    if (!preview || preview.plan_count === 0) return;
+    if (
+      !window.confirm(
+        `${preview.plan_count} 件分の 301 リダイレクトを /no1/.htaccess に反映します。\n\n* バックアップは自動で取られます\n* WP の draft 化と組み合わせて使ってください\n\n続行?`,
+      )
+    ) {
+      return;
+    }
+    setExecuting(true);
+    fetch('/api/decisions/_/deploy-redirects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: m }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        setResult(d.ok ? { ok: true, message: `${d.deployed} 件の 301 を反映 (backup: ${d.backup})` } : d);
+        setExecuting(false);
+      });
+  }
 
   function execute(dryRun: boolean) {
     if (!preview || preview.plan_count === 0) return;
@@ -164,6 +186,14 @@ export function ExecuteView() {
           >
             ⬇ 計画を CSV ダウンロード
           </button>
+          <button
+            type="button"
+            onClick={() => deployRedirects(mode)}
+            disabled={preview.plan_count === 0 || executing}
+            style={btnStyle('#9b59b6')}
+          >
+            🛡️ 301 リダイレクトを Xserver に反映
+          </button>
         </div>
         {result && (
           <div
@@ -256,6 +286,17 @@ function btnStyle(color: string, outline = false): React.CSSProperties {
   };
 }
 
+type Query = { query: string; clicks: number; impressions: number; avg_position: number };
+type OverlapQuery = {
+  query: string;
+  a_clicks: number;
+  a_impressions: number;
+  a_position: number;
+  b_clicks: number;
+  b_impressions: number;
+  b_position: number;
+};
+
 function PlanCard({ item, idx }: { item: PreviewItem; idx: number }) {
   const r = (() => {
     try {
@@ -266,6 +307,26 @@ function PlanCard({ item, idx }: { item: PreviewItem; idx: number }) {
   })();
   const reason = jpRationale(r.factors);
   const totalClicks = (item.winner_clicks ?? 0) + (item.loser_clicks ?? 0);
+
+  const [showQueries, setShowQueries] = useState(false);
+  const [winnerQ, setWinnerQ] = useState<Query[] | null>(null);
+  const [loserQ, setLoserQ] = useState<Query[] | null>(null);
+  const [overlap, setOverlap] = useState<OverlapQuery[] | null>(null);
+
+  function loadQueries() {
+    if (!showQueries) {
+      Promise.all([
+        fetch(`/api/articles/${item.winner_id}/queries?limit=5`).then((r) => r.json()),
+        fetch(`/api/articles/${item.loser_id}/queries?limit=5`).then((r) => r.json()),
+        fetch(`/api/articles/${item.winner_id}/queries-overlap/${item.loser_id}`).then((r) => r.json()),
+      ]).then(([w, l, o]) => {
+        setWinnerQ(w);
+        setLoserQ(l);
+        setOverlap(o);
+      });
+    }
+    setShowQueries(!showQueries);
+  }
 
   return (
     <article
@@ -313,7 +374,82 @@ function PlanCard({ item, idx }: { item: PreviewItem; idx: number }) {
           90日間で 残す側 {item.winner_clicks ?? 0} クリック / 削除側 {item.loser_clicks ?? 0} クリック
         </div>
       )}
+      <div style={{ marginTop: '0.4rem' }}>
+        <button
+          type="button"
+          onClick={loadQueries}
+          style={{
+            padding: '0.2rem 0.5rem',
+            background: 'transparent',
+            border: '1px solid #8884',
+            borderRadius: '0.3rem',
+            cursor: 'pointer',
+            fontSize: '0.75rem',
+          }}
+        >
+          {showQueries ? '▲ 閉じる' : '▼ 検索クエリを見る'}
+        </button>
+        {showQueries && (
+          <div style={{ marginTop: '0.4rem', fontSize: '0.78rem' }}>
+            {overlap !== null && overlap.length > 0 && (
+              <div style={{ background: '#f39c1222', padding: '0.4rem', borderRadius: '0.3rem', marginBottom: '0.3rem' }}>
+                <div style={{ fontWeight: 600, marginBottom: '0.2rem' }}>
+                  ⚠️ 両方が出現する共通クエリ ({overlap.length})
+                </div>
+                <table style={{ width: '100%', fontSize: '0.75rem' }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left' }}>クエリ</th>
+                      <th>残す側 (clk/imp/順位)</th>
+                      <th>削除側 (clk/imp/順位)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {overlap.slice(0, 10).map((o, i) => (
+                      <tr key={i}>
+                        <td>{o.query}</td>
+                        <td style={{ textAlign: 'right' }}>{o.a_clicks}/{o.a_impressions}/{o.a_position?.toFixed(1)}</td>
+                        <td style={{ textAlign: 'right' }}>{o.b_clicks}/{o.b_impressions}/{o.b_position?.toFixed(1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.3rem' }}>
+              <QueryList title="✅ 残す側 トップ KW" queries={winnerQ} />
+              <QueryList title="❌ 削除側 トップ KW" queries={loserQ} />
+            </div>
+          </div>
+        )}
+      </div>
     </article>
+  );
+}
+
+function QueryList({ title, queries }: { title: string; queries: Query[] | null }) {
+  return (
+    <div>
+      <div style={{ fontWeight: 600, fontSize: '0.75rem', marginBottom: '0.2rem' }}>{title}</div>
+      {queries === null ? (
+        <p style={{ fontSize: '0.7rem', opacity: 0.6 }}>読み込み中...</p>
+      ) : queries.length === 0 ? (
+        <p style={{ fontSize: '0.7rem', opacity: 0.6 }}>(GSC データなし)</p>
+      ) : (
+        <table style={{ width: '100%', fontSize: '0.72rem' }}>
+          <tbody>
+            {queries.map((q, i) => (
+              <tr key={i}>
+                <td>{q.query}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap', paddingLeft: '0.3rem' }}>
+                  {q.clicks} clk · {q.impressions} imp
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
   );
 }
 

@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { ArticlesView } from './ArticlesView.js';
+import { DashboardView } from './DashboardView.js';
 import { DecisionsView } from './DecisionsView.js';
 import { ExecuteView } from './ExecuteView.js';
 
-type Tab = 'articles' | 'decisions' | 'execute';
+type Tab = 'dashboard' | 'articles' | 'decisions' | 'execute';
 
 const TABS: Array<{ key: Tab; label: string; desc: string }> = [
+  { key: 'dashboard', label: '📊 ダッシュボード', desc: '全体の分析結果を可視化' },
   { key: 'decisions', label: '① 候補をレビュー', desc: 'engine の判定を1件ずつ承認/却下' },
   { key: 'execute',   label: '② 実行プレビュー',  desc: '承認済の統合をまとめて確認 → 一括実行' },
   { key: 'articles',  label: '記事一覧',          desc: '全 434 記事の検索/フィルタ' },
@@ -31,6 +33,7 @@ export function App() {
           </button>
         ))}
       </header>
+      {tab === 'dashboard' && <DashboardView />}
       {tab === 'articles' && <ArticlesView />}
       {tab === 'decisions' && <DecisionsView />}
       {tab === 'execute' && <ExecuteView />}
