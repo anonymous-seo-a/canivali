@@ -53,11 +53,11 @@ const checks: Check[] = [
     },
   },
   {
-    name: "category_quarantine='pending' = 5",
+    name: "category_quarantine='pending' (5 in P1 / 0 after P2)",
     sql: "SELECT COUNT(*) AS c FROM master_articles WHERE category_quarantine='pending'",
     predicate: (rows) => {
       const c = (rows[0] as { c: number }).c;
-      return { ok: c === 5, got: `${c}` };
+      return { ok: c === 5 || c === 0, got: `${c}` };
     },
   },
   {
@@ -74,6 +74,65 @@ const checks: Check[] = [
     predicate: (rows) => {
       const c = (rows[0] as { c: number }).c;
       return { ok: c === 434, got: `${c}` };
+    },
+  },
+  // ---------- Phase 2 (Semantic) ----------
+  {
+    name: '[P2] schema_migrations contains 0.2.0',
+    sql: "SELECT COUNT(*) AS c FROM schema_migrations WHERE version = '0.2.0'",
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 1, got: `${c}` };
+    },
+  },
+  {
+    name: "[P2] in_scope+pending articles embedded",
+    sql: `SELECT
+            (SELECT COUNT(*) FROM master_articles WHERE category_quarantine != 'confirmed') AS expected,
+            (SELECT COUNT(*) FROM master_articles WHERE article_embedding IS NOT NULL AND category_quarantine != 'confirmed') AS got`,
+    predicate: (rows) => {
+      const r = rows[0] as { expected: number; got: number };
+      return { ok: r.got === r.expected, got: `${r.got}/${r.expected}` };
+    },
+  },
+  {
+    name: '[P2] business_relevance_score populated',
+    sql: 'SELECT COUNT(*) AS c FROM master_articles WHERE business_relevance_score IS NOT NULL',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 425, got: `${c}` };
+    },
+  },
+  {
+    name: "[P2] pending resolved (== 0 still pending)",
+    sql: "SELECT COUNT(*) AS c FROM master_articles WHERE category_quarantine = 'pending'",
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c === 0, got: `${c}` };
+    },
+  },
+  {
+    name: '[P2] business_relevance_embeddings has v',
+    sql: 'SELECT COUNT(*) AS c FROM business_relevance_embeddings',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 1, got: `${c}` };
+    },
+  },
+  {
+    name: '[P2] topic centroids built (>= 100)',
+    sql: 'SELECT COUNT(*) AS c FROM master_topics WHERE centroid_vector IS NOT NULL',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 100, got: `${c}` };
+    },
+  },
+  {
+    name: '[P2] cannibalization_pairs has high-severity entries',
+    sql: "SELECT COUNT(*) AS c FROM cannibalization_pairs WHERE severity = 'high'",
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 100, got: `${c}` };
     },
   },
 ];

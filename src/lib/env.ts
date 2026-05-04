@@ -24,6 +24,7 @@ const EnvSchema = z.object({
   SERPAPI_KEY: z.string().optional(),
   ANTHROPIC_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),
+  VOYAGE_API_KEY: z.string().optional(),
 
   PORT: z.coerce.number().default(4040),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
