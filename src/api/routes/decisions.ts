@@ -28,7 +28,7 @@ decisionsRouter.get('/', (req, res) => {
   if (kind === 'pair') where.push('dl.pair_id IS NOT NULL');
   const whereSql = `WHERE ${where.join(' AND ')}`;
 
-  const totalRow = db.prepare(`SELECT COUNT(*) AS c FROM decision_log ${whereSql}`).all(params) as Array<{ c: number }>;
+  const totalRow = db.prepare(`SELECT COUNT(*) AS c FROM decision_log dl ${whereSql}`).all(params) as Array<{ c: number }>;
   const total = totalRow[0]?.c ?? 0;
 
   const rows = db
