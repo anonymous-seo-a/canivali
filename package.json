@@ -25,6 +25,8 @@
     "embed:reclassify-pending": "tsx src/embedding/reclassify-pending.ts",
     "embed:centroids": "tsx src/embedding/topic-centroids.ts",
     "embed:pairs": "tsx src/embedding/pair-similarity.ts",
+    "pull:gsc": "tsx src/ingestion/gsc-pull.ts",
+    "pull:serp-overlap": "tsx src/ingestion/serp-overlap.ts",
     "verify:env": "tsx scripts/verify-env.ts",
     "verify:db": "tsx scripts/verify-db.ts"
   },

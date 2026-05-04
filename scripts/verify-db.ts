@@ -135,6 +135,30 @@ const checks: Check[] = [
       return { ok: c >= 100, got: `${c}` };
     },
   },
+  {
+    name: '[P2] gsc_query_url_snapshots populated',
+    sql: 'SELECT COUNT(*) AS c, COUNT(DISTINCT article_id) AS articles FROM gsc_query_url_snapshots',
+    predicate: (rows) => {
+      const r = rows[0] as { c: number; articles: number };
+      return { ok: r.c >= 10_000 && r.articles >= 400, got: `rows=${r.c} articles=${r.articles}` };
+    },
+  },
+  {
+    name: '[P2] article_performance_snapshots aggregated',
+    sql: 'SELECT COUNT(*) AS c FROM article_performance_snapshots',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 400, got: `${c}` };
+    },
+  },
+  {
+    name: '[P2] cannibalization_pairs serp_overlap evaluated (>=20)',
+    sql: 'SELECT COUNT(*) AS c FROM cannibalization_pairs WHERE serp_overlap_pct IS NOT NULL',
+    predicate: (rows) => {
+      const c = (rows[0] as { c: number }).c;
+      return { ok: c >= 20, got: `${c}` };
+    },
+  },
 ];
 
 function main() {
